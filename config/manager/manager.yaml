@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slo-api
+  namespace: llm-scaler
+  labels:
+    app: slo-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: slo-api
+  template:
+    metadata:
+      labels:
+        app: slo-api
+    spec:
+      serviceAccountName: slo-api
+      containers:
+        - name: slo-api
+          image: slo-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: SLO_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: slo-api
+                  key: token
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: slo-api
+  namespace: llm-scaler
+  labels:
+    app: slo-api
+spec:
+  type: ClusterIP
+  selector:
+    app: slo-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

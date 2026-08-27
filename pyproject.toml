@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slo-api"
+version = "0.1.0"
+description = "HTTP facade for LLMSLORequirement CRs — exposes route-keyed REST API, translates to/from CRD specs"
+requires-python = ">=3.10"
+dependencies = [
+    "kubernetes>=28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "requests>=2.31"]
+
+[project.scripts]
+slo-api = "slo_api.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["slo_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+build/
+dist/
+
+# Never commit the live token — copy secret.example.yaml, fill in, apply.
+config/manager/secret.yaml

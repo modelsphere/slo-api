@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: slo-api
+  namespace: llm-scaler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: slo-api
+rules:
+  # Read CRs (resolve routes, serve GET/LIST, watch for index sync).
+  # patch/update: apply SLO changes to existing CRs.
+  # NOT included: create, delete — this service never creates or
+  # removes CRs; lifecycle is owned elsewhere (e.g. by the operator).
+  - apiGroups: ["inference.x-k8s.io"]
+    resources: ["llmslorequirements"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: slo-api
+subjects:
+  - kind: ServiceAccount
+    name: slo-api
+    namespace: llm-scaler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: slo-api
