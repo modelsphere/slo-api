@@ -21,5 +21,8 @@ slo-api = "slo_api.__main__:main"
 package-dir = {"" = "src"}
 packages = ["slo_api"]
 
+[tool.setuptools.package-data]
+slo_api = ["static/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

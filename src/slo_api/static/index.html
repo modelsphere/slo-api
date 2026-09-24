@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>slo-api</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 960px; margin: 24px auto; padding: 0 16px;
+    color: #1f2328; background: #f6f8fa;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 24px 0 8px; border-bottom: 1px solid #d0d7de; padding-bottom: 4px; }
+  h3 { font-size: 14px; margin: 16px 0 6px; }
+  .muted { color: #57606a; font-size: 12px; }
+  section.card {
+    background: #fff; border: 1px solid #d0d7de; border-radius: 6px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; margin: 8px 0 4px; font-weight: 600; font-size: 13px; }
+  label.inline { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    font: inherit; padding: 5px 8px; border: 1px solid #d0d7de;
+    border-radius: 6px; width: 100%; max-width: 320px;
+  }
+  input[type=number] { max-width: 120px; }
+  select { max-width: 160px; }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+             font-size: 12px; max-width: 100%; min-height: 90px; }
+  button {
+    font: inherit; padding: 6px 14px; border: 1px solid #d0d7de;
+    background: #f6f8fa; border-radius: 6px; cursor: pointer;
+  }
+  button.primary { background: #1f883d; color: #fff; border-color: #1f883d; }
+  button.danger  { background: #cf222e; color: #fff; border-color: #cf222e; }
+  button:hover   { filter: brightness(0.95); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+  .row > * { flex: 0 0 auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #d0d7de; }
+  th { background: #f6f8fa; font-weight: 600; font-size: 13px; }
+  tr:hover td { background: #f6f8fa; cursor: pointer; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge.yes { background: #ffe1c6; color: #bc4c00; }
+  .badge.no  { background: #eaeef2; color: #57606a; }
+  #status {
+    margin: 12px 0; padding: 10px 12px; border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; white-space: pre-wrap; display: none;
+  }
+  #status.ok    { background: #dafbe1; border: 1px solid #2da44e; display: block; }
+  #status.error { background: #ffebe9; border: 1px solid #cf222e; display: block; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  .hidden { display: none !important; }
+  .metric-row { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+  .metric-row select { max-width: 110px; }
+  .metric-row input[type=number] { max-width: 130px; }
+  .small { font-size: 12px; padding: 2px 8px; }
+</style>
+</head>
+<body>
+
+<h1>LLM SLO Configuration</h1>
+<p class="muted">Manage SLO requirements for model routes. Token is held only in this tab's session.</p>
+
+<section class="card">
+  <div class="row">
+    <label class="inline" for="token" style="min-width:60px;">Token</label>
+    <input type="password" id="token" placeholder="sk-..." autocomplete="off" style="max-width: 320px;">
+    <button id="saveToken" class="small">Set</button>
+    <button id="clearToken" class="small">Clear</button>
+    <span id="tokenStatus" class="muted"></span>
+  </div>
+</section>
+
+<section class="card" id="listCard">
+  <div class="row" style="justify-content: space-between;">
+    <h2 style="margin:0;">Routes</h2>
+    <div class="row">
+      <button id="newBtn">+ New</button>
+      <button id="refreshBtn">Refresh</button>
+    </div>
+  </div>
+  <div id="listArea"></div>
+  <div class="row" style="margin-top: 10px;">
+    <button id="prevPage" class="small">&larr; Prev</button>
+    <span id="pageInfo" class="muted"></span>
+    <button id="nextPage" class="small">Next &rarr;</button>
+    <span class="muted">pageSize</span>
+    <input type="number" id="pageSize" value="20" min="1" max="200" style="width:60px;">
+  </div>
+</section>
+
+<section class="card hidden" id="editCard">
+  <h2 id="editTitle">Edit route</h2>
+
+  <label for="route">Route</label>
+  <input type="text" id="route" placeholder="kimi-k2.5">
+  <p class="muted">Must match an existing <code>spec.serviceId</code> on some LLMSLORequirement CR.</p>
+
+  <label class="inline"><input type="checkbox" id="highPriority"> highPriority</label>
+  <p class="muted">Maps to <code>priority: 10</code> when checked, <code>0</code> otherwise.</p>
+
+  <h3>Deployment bounds</h3>
+  <div class="row">
+    <div>
+      <label>minimumDeployment</label>
+      <div class="row">
+        <select id="minType"><option value="replica">replica</option><option value="concurrency">concurrency</option></select>
+        <input type="number" id="minValue" min="1" step="1">
+      </div>
+    </div>
+    <div>
+      <label>maximumDeployment</label>
+      <div class="row">
+        <select id="maxType"><option value="replica">replica</option></select>
+        <input type="number" id="maxValue" min="1" step="1">
+      </div>
+    </div>
+  </div>
+
+  <h3>TTFT</h3>
+  <label>default.metrics</label>
+  <div id="ttftMetrics"></div>
+  <button class="small" data-addmetrics="ttft">+ metric</button>
+  <details>
+    <summary>ranges (JSON)</summary>
+    <textarea id="ttftRanges" placeholder='[{"contextLengthRangeLow":0,"metrics":[{"type":"p80","threshold":20.0}]}]'></textarea>
+  </details>
+
+  <h3>OTPS</h3>
+  <label>default.metrics</label>
+  <div id="otpsMetrics"></div>
+  <button class="small" data-addmetrics="otps">+ metric</button>
+  <details>
+    <summary>ranges (JSON)</summary>
+    <textarea id="otpsRanges" placeholder='[{"contextLengthRangeLow":0,"metrics":[{"type":"p30","threshold":30.0}]}]'></textarea>
+  </details>
+
+  <div class="row" style="margin-top:16px;">
+    <button id="saveBtn" class="primary">Save (PUT)</button>
+    <button id="deleteBtn" class="danger">Reset (DELETE)</button>
+    <button id="cancelBtn">Cancel</button>
+  </div>
+</section>
+
+<div id="status"></div>
+
+<script>
+(() => {
+  const TOKEN_KEY = "slo_api_token";
+  const $ = id => document.getElementById(id);
+
+  // ---------- state ----------
+  let currentPage = 1;
+  let editingRoute = null;  // null = new
+
+  // ---------- token ----------
+  function setToken(t) {
+    if (t) sessionStorage.setItem(TOKEN_KEY, t);
+    else sessionStorage.removeItem(TOKEN_KEY);
+    renderTokenStatus();
+  }
+  function getToken() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
+  function renderTokenStatus() {
+    $("tokenStatus").textContent = getToken() ? "✓ set for this tab" : "not set";
+  }
+  $("token").value = getToken();
+  renderTokenStatus();
+  $("saveToken").onclick = () => { setToken($("token").value.trim()); $("token").value = getToken(); refresh(); };
+  $("clearToken").onclick = () => { setToken(""); $("token").value = ""; };
+
+  // ---------- API wrapper ----------
+  async function api(method, path, body) {
+    const opts = { method, headers: {} };
+    if (getToken()) opts.headers["Authorization"] = "Bearer " + getToken();
+    if (body !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(path, opts);
+    const text = await r.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    return { status: r.status, body: data };
+  }
+
+  function showStatus(status, body, isError) {
+    const el = $("status");
+    el.className = isError ? "error" : "ok";
+    el.textContent = `${status}\n` + (typeof body === "object" ? JSON.stringify(body, null, 2) : (body || ""));
+  }
+
+  // ---------- list ----------
+  async function refresh() {
+    const size = parseInt($("pageSize").value, 10) || 20;
+    const { status, body } = await api("GET", `/v1/slo-config?page=${currentPage}&pageSize=${size}`);
+    if (status === 401) { showStatus(status, body, true); $("listArea").innerHTML = "<em>unauthorized</em>"; return; }
+    if (status !== 200) { showStatus(status, body, true); return; }
+    $("pageInfo").textContent = `page ${body.page} of ${Math.max(1, Math.ceil(body.total / body.pageSize))} — total ${body.total}`;
+    if (!body.items.length) { $("listArea").innerHTML = "<em>No routes configured.</em>"; return; }
+    const tbl = document.createElement("table");
+    tbl.innerHTML = `<thead><tr><th>route</th><th>highPriority</th><th>min</th><th>max</th></tr></thead>`;
+    const tb = document.createElement("tbody");
+    for (const it of body.items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><code>${esc(it.route)}</code></td>
+        <td><span class="badge ${it.highPriority ? "yes" : "no"}">${it.highPriority ? "yes" : "no"}</span></td>
+        <td>${it.minimumDeployment ? esc(it.minimumDeployment.value + " " + it.minimumDeployment.type) : "—"}</td>
+        <td>${it.maximumDeployment ? esc(it.maximumDeployment.value + " " + it.maximumDeployment.type) : "—"}</td>`;
+      tr.onclick = () => loadRoute(it.route);
+      tb.appendChild(tr);
+    }
+    tbl.appendChild(tb);
+    $("listArea").innerHTML = ""; $("listArea").appendChild(tbl);
+    showStatus(status, `${body.items.length} routes`, false);
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+  $("refreshBtn").onclick = refresh;
+  $("prevPage").onclick = () => { if (currentPage > 1) { currentPage--; refresh(); } };
+  $("nextPage").onclick = () => { currentPage++; refresh(); };
+  $("newBtn").onclick = () => showEdit(null);
+
+  // ---------- edit ----------
+  const METRIC_TYPES = ["avg", "p50", "p80", "p90", "p95", "p99"];
+
+  function addMetricRow(containerId, type, threshold) {
+    const div = document.createElement("div");
+    div.className = "metric-row";
+    const sel = document.createElement("select");
+    for (const t of METRIC_TYPES) {
+      const o = document.createElement("option");
+      o.value = o.textContent = t;
+      if (t === type) o.selected = true;
+      sel.appendChild(o);
+    }
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.step = "any"; inp.min = "0";
+    inp.value = threshold !== undefined ? threshold : "";
+    inp.placeholder = "threshold";
+    const rm = document.createElement("button");
+    rm.textContent = "×"; rm.className = "small";
+    rm.onclick = () => div.remove();
+    div.append(sel, inp, rm);
+    $(containerId).appendChild(div);
+  }
+
+  document.querySelectorAll("[data-addmetrics]").forEach(b => {
+    b.onclick = () => addMetricRow(b.dataset.addmetrics + "Metrics", "p80", "");
+  });
+
+  function readMetrics(containerId) {
+    const rows = [...$(containerId).querySelectorAll(".metric-row")];
+    return rows.map(r => ({
+      type: r.querySelector("select").value,
+      threshold: parseFloat(r.querySelector("input").value),
+    }));
+  }
+
+  function showEdit(routeData) {
+    $("editCard").classList.remove("hidden");
+    $("status").className = "";
+    if (routeData) {
+      editingRoute = routeData.route;
+      $("editTitle").textContent = `Edit: ${routeData.route}`;
+      $("route").value = routeData.route;
+      $("route").disabled = true;
+      $("highPriority").checked = !!routeData.highPriority;
+      $("minType").value = routeData.minimumDeployment?.type || "replica";
+      $("minValue").value = routeData.minimumDeployment?.value ?? "";
+      $("maxType").value = routeData.maximumDeployment?.type || "replica";
+      $("maxValue").value = routeData.maximumDeployment?.value ?? "";
+      $("ttftMetrics").innerHTML = "";
+      (routeData.ttft?.default?.metrics || []).forEach(m => addMetricRow("ttftMetrics", m.type, m.threshold));
+      $("ttftRanges").value = routeData.ttft?.ranges ? JSON.stringify(routeData.ttft.ranges, null, 2) : "";
+      $("otpsMetrics").innerHTML = "";
+      (routeData.otps?.default?.metrics || []).forEach(m => addMetricRow("otpsMetrics", m.type, m.threshold));
+      $("otpsRanges").value = routeData.otps?.ranges ? JSON.stringify(routeData.otps.ranges, null, 2) : "";
+    } else {
+      editingRoute = null;
+      $("editTitle").textContent = "New route";
+      $("route").value = ""; $("route").disabled = false;
+      $("highPriority").checked = false;
+      $("minType").value = "replica"; $("minValue").value = "";
+      $("maxType").value = "replica"; $("maxValue").value = "";
+      $("ttftMetrics").innerHTML = ""; addMetricRow("ttftMetrics", "p80", "");
+      $("ttftRanges").value = "";
+      $("otpsMetrics").innerHTML = ""; addMetricRow("otpsMetrics", "p80", "");
+      $("otpsRanges").value = "";
+    }
+  }
+
+  async function loadRoute(route) {
+    const { status, body } = await api("GET", `/v1/slo-config/${encodeURIComponent(route)}`);
+    if (status !== 200) { showStatus(status, body, true); return; }
+    showEdit(body);
+    showStatus(status, "loaded", false);
+  }
+
+  $("cancelBtn").onclick = () => { $("editCard").classList.add("hidden"); };
+
+  $("saveBtn").onclick = async () => {
+    const route = $("route").value.trim();
+    if (!route) { showStatus(400, "route is required", true); return; }
+    const body = { highPriority: $("highPriority").checked };
+
+    const minV = parseInt($("minValue").value, 10);
+    if (!isNaN(minV)) body.minimumDeployment = { type: $("minType").value, value: minV };
+    const maxV = parseInt($("maxValue").value, 10);
+    if (!isNaN(maxV)) body.maximumDeployment = { type: $("maxType").value, value: maxV };
+
+    // TTFT
+    const tm = readMetrics("ttftMetrics").filter(m => !isNaN(m.threshold));
+    const tr = $("ttftRanges").value.trim();
+    let tranges = null;
+    if (tr) {
+      try { tranges = JSON.parse(tr); }
+      catch (e) { showStatus(400, `ttft.ranges: invalid JSON — ${e.message}`, true); return; }
+    }
+    if (tm.length || tranges) {
+      body.ttft = { default: { metrics: tm.length ? tm : [{ type: "p80", threshold: 0 }] } };
+      if (tranges) body.ttft.ranges = tranges;
+    }
+
+    // OTPS
+    const om = readMetrics("otpsMetrics").filter(m => !isNaN(m.threshold));
+    const or_ = $("otpsRanges").value.trim();
+    let oranges = null;
+    if (or_) {
+      try { oranges = JSON.parse(or_); }
+      catch (e) { showStatus(400, `otps.ranges: invalid JSON — ${e.message}`, true); return; }
+    }
+    if (om.length || oranges) {
+      body.otps = { default: { metrics: om.length ? om : [{ type: "p80", threshold: 0 }] } };
+      if (oranges) body.otps.ranges = oranges;
+    }
+
+    const { status, body: resp } = await api("PUT", `/v1/slo-config/${encodeURIComponent(route)}`, body);
+    showStatus(status, resp, status >= 400);
+    if (status === 200) { editingRoute = route; $("route").disabled = true; $("editTitle").textContent = `Edit: ${route}`; refresh(); }
+  };
+
+  $("deleteBtn").onclick = async () => {
+    const route = editingRoute || $("route").value.trim();
+    if (!route) { showStatus(400, "no route selected", true); return; }
+    if (!confirm(`Reset SLO config for "${route}" to CRD defaults?\n\nThis sets priority=0, minimumDeployment={replica,1}, and removes maximumDeployment/ttft/otps.`)) return;
+    const { status, body: resp } = await api("DELETE", `/v1/slo-config/${encodeURIComponent(route)}`);
+    showStatus(status, resp || "(no content)", status >= 400);
+    if (status === 204) { $("editCard").classList.add("hidden"); refresh(); }
+  };
+
+  // Initial load
+  if (getToken()) refresh();
+})();
+</script>
+
+</body>
+</html>

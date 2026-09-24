@@ -72,6 +72,11 @@ def main():
     print(f"server up on {base}\n")
 
     step("healthz (no auth)", "GET", f"{base}/healthz", token=None, expect=200)
+    # Static UI page — public, but the form's API calls still require auth.
+    st, page = req("GET", f"{base}/demo-web-ui", token=None)[:2]
+    print(f"{'✓' if st == 200 and '<title>slo-api</title>' in page else '✗ FAIL'}  GET /demo-web-ui (UI page, no auth)              → {st}")
+    if st != 200 or "<title>slo-api</title>" not in page:
+        raise SystemExit(f"expected 200 with HTML, got {st}: {page[:200]}")
     step("readyz (no auth)", "GET", f"{base}/readyz", token=None, expect=200)
     step("unauthenticated GET → 401", "GET",
          f"{base}/v1/slo-config/kimi-k2.5", token=None, expect=401)

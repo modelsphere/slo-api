@@ -91,6 +91,28 @@ def test_healthz_no_auth_required(running_server):
     assert st == 200
 
 
+def test_demo_web_ui_serves_index_html_without_auth(running_server):
+    url, _, _ = running_server
+    req = urllib.request.Request(f"{url}/demo-web-ui", method="GET")
+    # Deliberately NO Authorization header — the page itself must be public.
+    with urllib.request.urlopen(req) as r:
+        body = r.read().decode()
+        ct = r.headers.get("Content-Type", "")
+    assert r.status == 200
+    assert ct.startswith("text/html")
+    assert "<title>slo-api</title>" in body
+
+
+def test_root_path_not_served(running_server):
+    """/ is intentionally not routed — API root only serves /demo-web-ui."""
+    url, _, _ = running_server
+    req = urllib.request.Request(f"{url}/", method="GET")
+    # / with no auth → 401 (auth gate fires before route resolution)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+    assert e.value.code == 401
+
+
 # ---------- GET ----------
 
 def test_get_returns_full_config(running_server):

@@ -3,8 +3,9 @@
 Routes (all require Bearer auth):
   PUT    /v1/slo-config/{route}   — full replace of SLO config on an existing CR
   GET    /v1/slo-config/{route}   — fetch current config
-  DELETE /v1/slo-config/{route}   — reset SLO fields to defaults (CR is kept)
+  DELETE /v1/slo-config/{route}   — reset SLO fields to CRD defaults (CR is kept)
   GET    /v1/slo-config           — paginated list of configured routes
+  GET    /demo-web-ui       — static web form (unauthenticated)
 
 Never creates new CRs. PUT on a route that doesn't resolve to an
 existing CR returns 404. If the route resolves to multiple CRs
@@ -14,6 +15,7 @@ existing CR returns 404. If the route resolves to multiple CRs
 import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import resources
 from urllib.parse import parse_qs, urlparse, unquote
 
 from kubernetes.client import ApiException
@@ -24,6 +26,17 @@ from slo_api.translate import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _load_index_html():
+    try:
+        return (resources.files("slo_api") / "static" / "index.html").read_bytes()
+    except (FileNotFoundError, OSError) as e:
+        log.warning("static index.html missing: %s", e)
+        return None
+
+
+_INDEX_HTML = _load_index_html()
 
 
 def _error(status, code, message, field=None, details=None):
@@ -103,6 +116,8 @@ def make_handler(index, api, auth_token):
                     return self._respond(200, {"status": "ok"})
                 return self._respond(503, {"status": "not_ready",
                                            "reason": "cr watch not synced"})
+            if path in ("/demo-web-ui", "/demo-web-ui/index.html"):
+                return self._serve_static()
             err = self._check_auth()
             if err: return self._respond(*err)
             kind, route = self._parse_route()
@@ -113,6 +128,20 @@ def make_handler(index, api, auth_token):
                 self._handle_list(params)
             else:
                 self._respond(*_error(404, "not_found", "unknown path"))
+
+        def _serve_static(self):
+            if _INDEX_HTML is None:
+                return self._respond(*_error(503, "upstream_error",
+                                             "static asset unavailable"))
+            self.send_response(200)
+            request_id = self.headers.get("X-Request-Id")
+            if request_id:
+                self.send_header("X-Request-Id", request_id)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(_INDEX_HTML)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(_INDEX_HTML)
 
         def do_PUT(self):
             err = self._check_auth()
