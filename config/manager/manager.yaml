@@ -18,8 +18,8 @@ spec:
       serviceAccountName: slo-api
       containers:
         - name: slo-api
-          image: slo-api:latest
-          imagePullPolicy: IfNotPresent
+          image: harbor.4pd.io/hardcore-tech/llm-slo-api:v0.1
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
