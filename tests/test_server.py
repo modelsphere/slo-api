@@ -74,14 +74,14 @@ def _req(method, url, body=None, token=TOKEN, headers=None):
 
 def test_no_auth_returns_401(running_server):
     url, _, _ = running_server
-    st, body = _req("GET", f"{url}/v1/slo-config/kimi-k2.5", token=None)
+    st, body = _req("GET", f"{url}/config/kimi-k2.5", token=None)
     assert st == 401
     assert body["error"]["code"] == "unauthorized"
 
 
 def test_wrong_token_returns_401(running_server):
     url, _, _ = running_server
-    st, _ = _req("GET", f"{url}/v1/slo-config/kimi-k2.5", token="nope")
+    st, _ = _req("GET", f"{url}/config/kimi-k2.5", token="nope")
     assert st == 401
 
 
@@ -93,7 +93,7 @@ def test_healthz_no_auth_required(running_server):
 
 def test_demo_web_ui_serves_index_html_without_auth(running_server):
     url, _, _ = running_server
-    req = urllib.request.Request(f"{url}/demo-web-ui", method="GET")
+    req = urllib.request.Request(f"{url}/demo-webui", method="GET")
     # Deliberately NO Authorization header — the page itself must be public.
     with urllib.request.urlopen(req) as r:
         body = r.read().decode()
@@ -104,7 +104,7 @@ def test_demo_web_ui_serves_index_html_without_auth(running_server):
 
 
 def test_root_path_not_served(running_server):
-    """/ is intentionally not routed — API root only serves /demo-web-ui."""
+    """/ is intentionally not routed — API root only serves /demo-webui."""
     url, _, _ = running_server
     req = urllib.request.Request(f"{url}/", method="GET")
     # / with no auth → 401 (auth gate fires before route resolution)
@@ -122,7 +122,7 @@ def test_get_returns_full_config(running_server):
     api.seed(cr)
     idx._apply("ADDED", cr)
 
-    st, body = _req("GET", f"{url}/v1/slo-config/kimi-k2.5")
+    st, body = _req("GET", f"{url}/config/kimi-k2.5")
     assert st == 200
     assert body["route"] == "kimi-k2.5"
     assert body["highPriority"] is True
@@ -134,7 +134,7 @@ def test_get_returns_full_config(running_server):
 
 def test_get_unknown_route_returns_404(running_server):
     url, _, _ = running_server
-    st, body = _req("GET", f"{url}/v1/slo-config/ghost")
+    st, body = _req("GET", f"{url}/config/ghost")
     assert st == 404
     assert body["error"]["code"] == "not_found"
 
@@ -143,7 +143,7 @@ def test_get_unknown_route_returns_404(running_server):
 
 def test_put_on_missing_route_returns_404(running_server):
     url, _, _ = running_server
-    st, body = _req("PUT", f"{url}/v1/slo-config/ghost",
+    st, body = _req("PUT", f"{url}/config/ghost",
                     body={"highPriority": True})
     assert st == 404
 
@@ -154,7 +154,7 @@ def test_put_validation_error_returns_400(running_server):
     api.seed(cr)
     idx._apply("ADDED", cr)
 
-    st, body = _req("PUT", f"{url}/v1/slo-config/kimi-k2.5",
+    st, body = _req("PUT", f"{url}/config/kimi-k2.5",
                     body={"highPriority": "yes"})
     assert st == 400
     assert body["error"]["field"] == "highPriority"
@@ -176,7 +176,7 @@ def test_put_updates_priority_and_preserves_foreign_fields(running_server):
         "ttft": {"default": {"metrics": [{"type": "p80", "threshold": 20.0}]}},
         "otps": {"default": {"metrics": [{"type": "p80", "threshold": 30.0}]}},
     }
-    st, resp = _req("PUT", f"{url}/v1/slo-config/kimi-k2.5", body=body)
+    st, resp = _req("PUT", f"{url}/config/kimi-k2.5", body=body)
     assert st == 200
     assert resp["route"] == "kimi-k2.5"
     assert resp["highPriority"] is True
@@ -195,14 +195,14 @@ def test_put_body_route_mismatch_returns_400(running_server):
     api.seed(cr)
     idx._apply("ADDED", cr)
 
-    st, body = _req("PUT", f"{url}/v1/slo-config/kimi-k2.5",
+    st, body = _req("PUT", f"{url}/config/kimi-k2.5",
                     body={"route": "other", "highPriority": True})
     assert st == 400
 
 
 def test_put_never_creates_cr(running_server):
     url, api, _ = running_server
-    st, _ = _req("PUT", f"{url}/v1/slo-config/brand-new",
+    st, _ = _req("PUT", f"{url}/config/brand-new",
                  body={"highPriority": True})
     assert st == 404
     assert api.list_cluster_custom_object("", "", "")["items"] == []
@@ -220,7 +220,7 @@ def test_delete_resets_slo_fields_keeps_cr(running_server):
     api.seed(cr)
     idx._apply("ADDED", cr)
 
-    st, _ = _req("DELETE", f"{url}/v1/slo-config/kimi-k2.5")
+    st, _ = _req("DELETE", f"{url}/config/kimi-k2.5")
     assert st == 204
 
     patched = api.get_namespaced_custom_object(
@@ -239,7 +239,7 @@ def test_delete_resets_slo_fields_keeps_cr(running_server):
 
 def test_delete_on_missing_route_returns_404(running_server):
     url, _, _ = running_server
-    st, _ = _req("DELETE", f"{url}/v1/slo-config/ghost")
+    st, _ = _req("DELETE", f"{url}/config/ghost")
     assert st == 404
 
 
@@ -247,7 +247,7 @@ def test_delete_on_missing_route_returns_404(running_server):
 
 def test_list_empty(running_server):
     url, _, _ = running_server
-    st, body = _req("GET", f"{url}/v1/slo-config")
+    st, body = _req("GET", f"{url}/config")
     assert st == 200
     assert body == {"page": 1, "pageSize": 20, "total": 0, "items": []}
 
@@ -263,7 +263,7 @@ def test_list_pagination_and_summary_shape(running_server):
         api.seed(cr)
         idx._apply("ADDED", cr)
 
-    st, body = _req("GET", f"{url}/v1/slo-config?page=1&pageSize=2")
+    st, body = _req("GET", f"{url}/config?page=1&pageSize=2")
     assert st == 200
     assert body["total"] == 3
     assert body["pageSize"] == 2
@@ -276,17 +276,17 @@ def test_list_pagination_and_summary_shape(running_server):
         assert "route" in item
         assert "highPriority" in item
 
-    st, body = _req("GET", f"{url}/v1/slo-config?page=2&pageSize=2")
+    st, body = _req("GET", f"{url}/config?page=2&pageSize=2")
     assert len(body["items"]) == 1
 
 
 def test_list_invalid_page_params(running_server):
     url, _, _ = running_server
-    st, _ = _req("GET", f"{url}/v1/slo-config?page=0")
+    st, _ = _req("GET", f"{url}/config?page=0")
     assert st == 400
-    st, _ = _req("GET", f"{url}/v1/slo-config?pageSize=abc")
+    st, _ = _req("GET", f"{url}/config?pageSize=abc")
     assert st == 400
-    st, _ = _req("GET", f"{url}/v1/slo-config?pageSize=9999")
+    st, _ = _req("GET", f"{url}/config?pageSize=9999")
     assert st == 400
 
 
@@ -299,10 +299,10 @@ def test_ambiguous_route_returns_409(running_server):
     api.seed(cr1); api.seed(cr2)
     idx._apply("ADDED", cr1); idx._apply("ADDED", cr2)
 
-    st, body = _req("GET", f"{url}/v1/slo-config/kimi-k2.5")
+    st, body = _req("GET", f"{url}/config/kimi-k2.5")
     assert st == 409
     assert body["error"]["code"] == "conflict"
 
-    st, _ = _req("PUT", f"{url}/v1/slo-config/kimi-k2.5",
+    st, _ = _req("PUT", f"{url}/config/kimi-k2.5",
                  body={"highPriority": True})
     assert st == 409

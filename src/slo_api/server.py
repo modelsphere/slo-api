@@ -1,11 +1,11 @@
-"""HTTP surface for /v1/slo-config.
+"""HTTP surface for /config.
 
 Routes (all require Bearer auth):
-  PUT    /v1/slo-config/{route}   — full replace of SLO config on an existing CR
-  GET    /v1/slo-config/{route}   — fetch current config
-  DELETE /v1/slo-config/{route}   — reset SLO fields to CRD defaults (CR is kept)
-  GET    /v1/slo-config           — paginated list of configured routes
-  GET    /demo-web-ui       — static web form (unauthenticated)
+  PUT    /config/{route}   — full replace of SLO config on an existing CR
+  GET    /config/{route}   — fetch current config
+  DELETE /config/{route}   — reset SLO fields to CRD defaults (CR is kept)
+  GET    /config           — paginated list of configured routes
+  GET    /demo-webui       — static web form (unauthenticated)
 
 Never creates new CRs. PUT on a route that doesn't resolve to an
 existing CR returns 404. If the route resolves to multiple CRs
@@ -100,9 +100,9 @@ def make_handler(index, api, auth_token):
 
         def _parse_route(self):
             path = unquote(urlparse(self.path).path)
-            if path == "/v1/slo-config":
+            if path == "/config":
                 return "list", None
-            prefix = "/v1/slo-config/"
+            prefix = "/config/"
             if path.startswith(prefix) and len(path) > len(prefix):
                 return "item", path[len(prefix):]
             return "other", None
@@ -116,7 +116,7 @@ def make_handler(index, api, auth_token):
                     return self._respond(200, {"status": "ok"})
                 return self._respond(503, {"status": "not_ready",
                                            "reason": "cr watch not synced"})
-            if path in ("/demo-web-ui", "/demo-web-ui/index.html"):
+            if path in ("/demo-webui", "/demo-webui/index.html"):
                 return self._serve_static()
             err = self._check_auth()
             if err: return self._respond(*err)

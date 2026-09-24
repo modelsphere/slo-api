@@ -157,6 +157,11 @@
 (() => {
   const TOKEN_KEY = "slo_api_token";
   const $ = id => document.getElementById(id);
+  // API lives next to this page under the same mount prefix:
+  //   page: <prefix>/demo-webui  →  api: <prefix>/config
+  // Works both when served at root (local dev) and behind the
+  // upstream gateway prefix (/api/v1/admin/slo).
+  const API_BASE = location.pathname.replace(/\/demo-webui.*$/, "") + "/config";
 
   // ---------- state ----------
   let currentPage = 1;
@@ -201,7 +206,7 @@
   // ---------- list ----------
   async function refresh() {
     const size = parseInt($("pageSize").value, 10) || 20;
-    const { status, body } = await api("GET", `/v1/slo-config?page=${currentPage}&pageSize=${size}`);
+    const { status, body } = await api("GET", `${API_BASE}?page=${currentPage}&pageSize=${size}`);
     if (status === 401) { showStatus(status, body, true); $("listArea").innerHTML = "<em>unauthorized</em>"; return; }
     if (status !== 200) { showStatus(status, body, true); return; }
     $("pageInfo").textContent = `page ${body.page} of ${Math.max(1, Math.ceil(body.total / body.pageSize))} — total ${body.total}`;
@@ -300,7 +305,7 @@
   }
 
   async function loadRoute(route) {
-    const { status, body } = await api("GET", `/v1/slo-config/${encodeURIComponent(route)}`);
+    const { status, body } = await api("GET", `${API_BASE}/${encodeURIComponent(route)}`);
     if (status !== 200) { showStatus(status, body, true); return; }
     showEdit(body);
     showStatus(status, "loaded", false);
@@ -344,7 +349,7 @@
       if (oranges) body.otps.ranges = oranges;
     }
 
-    const { status, body: resp } = await api("PUT", `/v1/slo-config/${encodeURIComponent(route)}`, body);
+    const { status, body: resp } = await api("PUT", `${API_BASE}/${encodeURIComponent(route)}`, body);
     showStatus(status, resp, status >= 400);
     if (status === 200) { editingRoute = route; $("route").disabled = true; $("editTitle").textContent = `Edit: ${route}`; refresh(); }
   };
@@ -353,7 +358,7 @@
     const route = editingRoute || $("route").value.trim();
     if (!route) { showStatus(400, "no route selected", true); return; }
     if (!confirm(`Reset SLO config for "${route}" to CRD defaults?\n\nThis sets priority=0, minimumDeployment={replica,1}, and removes maximumDeployment/ttft/otps.`)) return;
-    const { status, body: resp } = await api("DELETE", `/v1/slo-config/${encodeURIComponent(route)}`);
+    const { status, body: resp } = await api("DELETE", `${API_BASE}/${encodeURIComponent(route)}`);
     showStatus(status, resp || "(no content)", status >= 400);
     if (status === 204) { $("editCard").classList.add("hidden"); refresh(); }
   };

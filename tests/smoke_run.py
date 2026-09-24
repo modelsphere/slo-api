@@ -73,17 +73,17 @@ def main():
 
     step("healthz (no auth)", "GET", f"{base}/healthz", token=None, expect=200)
     # Static UI page — public, but the form's API calls still require auth.
-    st, page = req("GET", f"{base}/demo-web-ui", token=None)[:2]
-    print(f"{'✓' if st == 200 and '<title>slo-api</title>' in page else '✗ FAIL'}  GET /demo-web-ui (UI page, no auth)              → {st}")
+    st, page = req("GET", f"{base}/demo-webui", token=None)[:2]
+    print(f"{'✓' if st == 200 and '<title>slo-api</title>' in page else '✗ FAIL'}  GET /demo-webui (UI page, no auth)              → {st}")
     if st != 200 or "<title>slo-api</title>" not in page:
         raise SystemExit(f"expected 200 with HTML, got {st}: {page[:200]}")
     step("readyz (no auth)", "GET", f"{base}/readyz", token=None, expect=200)
     step("unauthenticated GET → 401", "GET",
-         f"{base}/v1/slo-config/kimi-k2.5", token=None, expect=401)
+         f"{base}/config/kimi-k2.5", token=None, expect=401)
     step("GET existing route", "GET",
-         f"{base}/v1/slo-config/kimi-k2.5", expect=200)
+         f"{base}/config/kimi-k2.5", expect=200)
     step("GET unknown route → 404", "GET",
-         f"{base}/v1/slo-config/ghost", expect=404)
+         f"{base}/config/ghost", expect=404)
 
     put_body = {
         "highPriority": True,
@@ -92,30 +92,30 @@ def main():
         "ttft": {"default": {"metrics": [{"type": "p80", "threshold": 20.0,}]}},
         "otps": {"default": {"metrics": [{"type": "p80", "threshold": 30.0}]}},
     }
-    step("PUT full config", "PUT", f"{base}/v1/slo-config/kimi-k2.5",
+    step("PUT full config", "PUT", f"{base}/config/kimi-k2.5",
          body=put_body, expect=200)
-    step("GET after PUT", "GET", f"{base}/v1/slo-config/kimi-k2.5", expect=200)
+    step("GET after PUT", "GET", f"{base}/config/kimi-k2.5", expect=200)
     step("PUT invalid (enum) → 400", "PUT",
-         f"{base}/v1/slo-config/kimi-k2.5",
+         f"{base}/config/kimi-k2.5",
          body={"ttft": {"default": {"metrics": [{"type": "p99.9", "threshold": 1.0}]}}},
          expect=400)
     step("PUT unknown route → 404", "PUT",
-         f"{base}/v1/slo-config/ghost", body={"highPriority": True}, expect=404)
+         f"{base}/config/ghost", body={"highPriority": True}, expect=404)
     step("PUT route mismatch → 400", "PUT",
-         f"{base}/v1/slo-config/kimi-k2.5",
+         f"{base}/config/kimi-k2.5",
          body={"route": "other"}, expect=400)
 
-    step("LIST", "GET", f"{base}/v1/slo-config", expect=200)
+    step("LIST", "GET", f"{base}/config", expect=200)
     step("LIST with pagination", "GET",
-         f"{base}/v1/slo-config?page=1&pageSize=1", expect=200)
+         f"{base}/config?page=1&pageSize=1", expect=200)
     step("LIST bad page → 400", "GET",
-         f"{base}/v1/slo-config?page=0", expect=400)
+         f"{base}/config?page=0", expect=400)
 
-    step("DELETE", "DELETE", f"{base}/v1/slo-config/kimi-k2.5", expect=204)
+    step("DELETE", "DELETE", f"{base}/config/kimi-k2.5", expect=204)
     step("GET after DELETE (defaults)", "GET",
-         f"{base}/v1/slo-config/kimi-k2.5", expect=200)
+         f"{base}/config/kimi-k2.5", expect=200)
     step("DELETE unknown → 404", "DELETE",
-         f"{base}/v1/slo-config/ghost", expect=404)
+         f"{base}/config/ghost", expect=404)
 
     # Verify the final CR state matches intent
     final = api.get_namespaced_custom_object(
