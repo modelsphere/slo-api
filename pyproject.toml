@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,9 +7,15 @@ name = "slo-api"
 version = "0.1.0"
 description = "HTTP facade for LLMSLORequirement CRs — exposes route-keyed REST API, translates to/from CRD specs"
 requires-python = ">=3.10"
+readme = "README.md"
+license = "Apache-2.0"
 dependencies = [
     "kubernetes>=28",
 ]
+
+[project.urls]
+Homepage = "https://github.com/modelsphere/slo-api"
+Source = "https://github.com/modelsphere/slo-api"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "requests>=2.31"]
