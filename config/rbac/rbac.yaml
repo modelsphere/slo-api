@@ -13,7 +13,9 @@ rules:
   # patch/update: apply SLO changes to existing CRs.
   # NOT included: create, delete — this service never creates or
   # removes CRs; lifecycle is owned elsewhere (e.g. by the operator).
-  - apiGroups: ["inference.x-k8s.io"]
+  # Both groups: the CRDs moved from inference.x-k8s.io, and slo-api picks
+  # whichever the cluster serves at startup (slo_api.resolve_group).
+  - apiGroups: ["inference.modelsphere.dev", "inference.x-k8s.io"]
     resources: ["llmslorequirements"]
     verbs: ["get", "list", "watch", "patch", "update"]
 ---

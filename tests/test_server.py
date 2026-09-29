@@ -183,7 +183,7 @@ def test_put_updates_priority_and_preserves_foreign_fields(running_server):
 
     # Check the CR was patched and foreign fields preserved
     patched = api.get_namespaced_custom_object(
-        "inference.x-k8s.io", "v1alpha1", "kimi", "llmslorequirements", "kimi-k25")
+        "inference.modelsphere.dev", "v1alpha1", "kimi", "llmslorequirements", "kimi-k25")
     assert patched["spec"]["priority"] == 10
     assert patched["spec"]["someForeignField"] == {"keep": "me"}
     assert patched["spec"]["minimumDeployment"] == {"type": "replica", "value": 1}
@@ -224,7 +224,7 @@ def test_delete_resets_slo_fields_keeps_cr(running_server):
     assert st == 204
 
     patched = api.get_namespaced_custom_object(
-        "inference.x-k8s.io", "v1alpha1", "kimi", "llmslorequirements", "kimi-k25")
+        "inference.modelsphere.dev", "v1alpha1", "kimi", "llmslorequirements", "kimi-k25")
     # Reset applies CRD defaults: priority and minimumDeployment have
     # explicit defaults in the schema; fields with no default become absent.
     assert patched["spec"]["priority"] == 0

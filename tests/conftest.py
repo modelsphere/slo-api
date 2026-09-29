@@ -7,7 +7,7 @@ from slo_api.cr_index import CRIndex
 
 
 CRD_TEMPLATE = lambda ns, name, sid, extra_spec=None: {
-    "apiVersion": "inference.x-k8s.io/v1alpha1",
+    "apiVersion": "inference.modelsphere.dev/v1alpha1",
     "kind": "LLMSLORequirement",
     "metadata": {"namespace": ns, "name": name, "resourceVersion": "1"},
     "spec": {"serviceId": sid, **(extra_spec or {})},

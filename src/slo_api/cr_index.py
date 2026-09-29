@@ -18,7 +18,7 @@ import time
 
 from kubernetes import client, watch
 
-from slo_api import GROUP, VERSION, PLURAL
+from slo_api import VERSION, PLURAL, group
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class CRIndex:
         try:
             for event in w.stream(
                     api.list_cluster_custom_object,
-                    GROUP, VERSION, PLURAL,
+                    group(), VERSION, PLURAL,
                     **kwargs):
                 if self._stop.is_set():
                     return

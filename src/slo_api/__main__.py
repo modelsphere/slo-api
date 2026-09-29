@@ -7,6 +7,7 @@ import sys
 from kubernetes import client, config as kube_config
 from kubernetes.config.config_exception import ConfigException
 
+import slo_api
 from slo_api.cr_index import CRIndex
 from slo_api.server import serve
 
@@ -40,6 +41,8 @@ def main():
     except ConfigException:
         kube_config.load_kube_config()
         log.info("kubernetes: using local kubeconfig")
+
+    slo_api.resolve_group()   # logs which group, and why
 
     api = client.CustomObjectsApi()
     index = CRIndex(api=api)
