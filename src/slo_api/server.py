@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse, unquote
 
 from kubernetes.client import ApiException
 
-from slo_api import PLURAL, GROUP, VERSION
+from slo_api import PLURAL, VERSION, group
 from slo_api.translate import (
     ValidationError, api_to_spec, merge_spec, spec_to_api,
 )
@@ -193,7 +193,7 @@ def make_handler(index, api, auth_token):
             (cr_dict, None) on success, (None, error_tuple) on failure."""
             try:
                 cr = api.get_namespaced_custom_object(
-                    GROUP, VERSION, ns, PLURAL, name)
+                    group(), VERSION, ns, PLURAL, name)
                 return cr, None
             except ApiException as e:
                 if e.status == 404:
@@ -232,7 +232,7 @@ def make_handler(index, api, auth_token):
 
             try:
                 api.patch_namespaced_custom_object(
-                    GROUP, VERSION, ns, PLURAL, name,
+                    group(), VERSION, ns, PLURAL, name,
                     {"spec": merged},
                 )
             except ApiException as e:
@@ -273,7 +273,7 @@ def make_handler(index, api, auth_token):
 
             try:
                 api.patch_namespaced_custom_object(
-                    GROUP, VERSION, ns, PLURAL, name, patch,
+                    group(), VERSION, ns, PLURAL, name, patch,
                 )
             except ApiException as e:
                 log.warning("reset %s/%s failed: %s %s", ns, name, e.status, e.reason)

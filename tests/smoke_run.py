@@ -119,7 +119,7 @@ def main():
 
     # Verify the final CR state matches intent
     final = api.get_namespaced_custom_object(
-        "inference.x-k8s.io", "v1alpha1", "kimi",
+        "inference.modelsphere.dev", "v1alpha1", "kimi",
         "llmslorequirements", "kimi-k25")
     print(f"\nfinal CR spec: {json.dumps(final['spec'], indent=2)}")
 

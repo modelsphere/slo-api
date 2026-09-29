@@ -3,12 +3,18 @@
 A small HTTP API for reading and changing the SLO of an LLM inference service,
 without handing the caller access to Kubernetes.
 
-The SLO itself lives in an `LLMSLORequirement` custom resource (group
-`inference.x-k8s.io`), which
+The SLO itself lives in an `LLMSLORequirement` custom resource, which
 [slo-scaler-decision-gen](https://github.com/modelsphere/slo-scaler-decision-gen)
 reads to decide replica counts. slo-api is a front door onto those resources:
 callers address a service by its route name, send plain JSON, and never see a
 namespace, a CR name or a kubeconfig.
+
+The CRDs moved from `inference.x-k8s.io` to `inference.modelsphere.dev`, and
+clusters are on either while that is in progress. slo-api asks the API server
+which of the two it serves and uses that, deciding once at startup and logging
+the answer. A cluster serving **both** is logged as a warning: CRs can exist
+under either group and only the chosen one is read, so set `SLO_API_GROUP` to
+pin it when that matters.
 
 ```
   client ── Bearer token ──▶ slo-api ──▶ LLMSLORequirement CRs ──▶ decision-gen
