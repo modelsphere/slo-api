@@ -13,8 +13,8 @@ The CRDs moved from `inference.x-k8s.io` to `inference.modelsphere.dev`, and
 clusters are on either while that is in progress. slo-api asks the API server
 which of the two it serves and uses that, deciding once at startup and logging
 the answer. A cluster serving **both** is logged as a warning: CRs can exist
-under either group and only the chosen one is read, so set `SLO_API_GROUP` to
-pin it when that matters.
+under either group while the migration is in progress, and only the chosen one
+is read.
 
 ```
   client ── Bearer token ──▶ slo-api ──▶ LLMSLORequirement CRs ──▶ decision-gen

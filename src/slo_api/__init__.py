@@ -5,7 +5,6 @@ custom resource. Never creates new CRs; only get/patch/replace/delete
 on existing ones.
 """
 import logging as _logging
-import os as _os
 
 _log = _logging.getLogger("slo-api")
 
@@ -28,31 +27,23 @@ def group():
     return _group
 
 
-def resolve_group(apis_api=None, env=None, log=None):
+def resolve_group(apis_api=None, log=None):
     """Pick the group to use, once, at startup. Returns it.
 
-    SLO_API_GROUP pins it and skips discovery -- the escape hatch for a cluster
-    where the automatic answer is not the wanted one.
+    Ask the API server which of GROUPS it serves and take the first in that
+    order, so a cluster that has migrated is read under the new group.
 
-    Otherwise ask the API server which of GROUPS it serves and take the first
-    in that order, so a cluster part-way through the migration is read under the
-    new group. THAT CASE IS LOGGED AS A WARNING: while both are served, CRs can
-    exist under either, and objects under the group not chosen are invisible to
-    this process -- the same shape of silent-partial-answer this resolution
-    exists to avoid. Pin the group when that matters.
+    A cluster serving BOTH is logged as a warning: CRs can exist under either
+    while the migration is in progress, and only the chosen group is read, so
+    the answer can be a subset without looking like one. The fix for that is to
+    finish the migration -- there is deliberately no override, which would only
+    be a way to keep running in the ambiguous state.
 
     Discovery failing, or neither group being served, leaves the default: the
     first real request then reports the actual problem with the actual error.
     """
     global _group
-    env = env if env is not None else _os.environ
     log = log or _log
-
-    pinned = (env.get("SLO_API_GROUP") or "").strip()
-    if pinned:
-        _group = pinned
-        log.info("LLMSLORequirement group pinned by SLO_API_GROUP: %s", _group)
-        return _group
 
     try:
         from kubernetes import client as _client
@@ -70,7 +61,7 @@ def resolve_group(apis_api=None, env=None, log=None):
     if len(present) > 1:
         log.warning(
             "cluster serves both %s; using %s. CRs under the other group are "
-            "invisible to slo-api -- set SLO_API_GROUP to pin it",
+            "invisible to slo-api until the migration finishes",
             " and ".join(present), _group)
     else:
         log.info("LLMSLORequirement group: %s", _group)

@@ -94,25 +94,12 @@ def _log():
     return L()
 
 
-def test_env_pins_the_group_and_skips_discovery():
-    _restore()
-    lg = _log()
-    # Discovery would raise if it ran; pinning must not reach it.
-    got = slo_api.resolve_group(_Apis(raises=AssertionError("discovery ran")),
-                                env={"SLO_API_GROUP": "inference.x-k8s.io"}, log=lg)
-    assert got == "inference.x-k8s.io"
-    assert slo_api.group() == "inference.x-k8s.io"
-    assert any("pinned" in m for m in lg.lines["info"])
-    _restore()
-
-
 def test_both_groups_served_warns_that_the_other_is_invisible():
     # The dangerous case: CRs can sit under either, and only one is read.
     # Silence here is what makes a partial answer look like a complete one.
     _restore()
     lg = _log()
-    slo_api.resolve_group(_Apis(["inference.x-k8s.io", "inference.modelsphere.dev"]),
-                          env={}, log=lg)
+    slo_api.resolve_group(_Apis(["inference.x-k8s.io", "inference.modelsphere.dev"]), log=lg)
     assert lg.lines["warning"], "picking between two served groups must warn"
     assert "invisible" in lg.lines["warning"][0]
     _restore()
@@ -123,6 +110,6 @@ def test_one_group_served_does_not_warn():
     # would pass just as well and mean nothing.
     _restore()
     lg = _log()
-    slo_api.resolve_group(_Apis(["inference.modelsphere.dev"]), env={}, log=lg)
+    slo_api.resolve_group(_Apis(["inference.modelsphere.dev"]), log=lg)
     assert not lg.lines["warning"]
     _restore()
