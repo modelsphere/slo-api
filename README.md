@@ -9,13 +9,6 @@ reads to decide replica counts. slo-api is a front door onto those resources:
 callers address a service by its route name, send plain JSON, and never see a
 namespace, a CR name or a kubeconfig.
 
-The CRDs moved from `inference.x-k8s.io` to `inference.modelsphere.dev`, and
-clusters are on either while that is in progress. slo-api asks the API server
-which of the two it serves and uses that, deciding once at startup and logging
-the answer. A cluster serving **both** is logged as a warning: CRs can exist
-under either group while the migration is in progress, and only the chosen one
-is read.
-
 ```
   client ── Bearer token ──▶ slo-api ──▶ LLMSLORequirement CRs ──▶ decision-gen
                               (patch only; never creates or deletes a CR)
