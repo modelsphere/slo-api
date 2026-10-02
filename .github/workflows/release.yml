@@ -1,9 +1,7 @@
 # Public release: a version tag builds the image and pushes it to Docker Hub.
 #
-# The internal image is built separately by .gitlab-ci.yml and goes to harbor.
-# Both build the same Dockerfile; only the base-image build args and the
-# destination registry differ. Every base here already defaults to a public
-# image, so this side passes no overrides.
+# The Dockerfile's base image and PyPI index default to public ones (Docker Hub,
+# PyPI), so no build args are passed here.
 #
 # The image is llm-slo-api, not the repo name: that is the name it was first
 # published under, and the llm-slo-decision-gen chart points at it.
