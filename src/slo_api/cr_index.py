@@ -118,9 +118,20 @@ class CRIndex:
 
     def _watch_once(self):
         api = self._api_client()
+        # List first, then watch from the list's resourceVersion. A bare watch only marks the index
+        # synced on its first event, and with no CRs in the cluster there is none: the API server
+        # sends no ADDED event and its first BOOKMARK can take minutes, so readiness stayed 503 and
+        # the liveness probe killed the pod before it ever served. An empty list is a complete one.
+        listing = api.list_cluster_custom_object(group(), VERSION, PLURAL)
+        self._replace((listing or {}).get("items") or [])
+        self._synced.set()
+        rv = ((listing or {}).get("metadata") or {}).get("resourceVersion")
+
         wf = self._watch_factory or watch.Watch
         w = wf()
         kwargs = {} if self._watch_factory else {"allow_watch_bookmarks": True}
+        if rv and not self._watch_factory:
+            kwargs["resource_version"] = rv
         try:
             for event in w.stream(
                     api.list_cluster_custom_object,
@@ -141,6 +152,14 @@ class CRIndex:
             stop = getattr(w, "stop", None)
             if callable(stop):
                 stop()
+
+    def _replace(self, items):
+        """Rebuild the index from a full list: drops CRs deleted while no watch was running."""
+        with self._lock:
+            self._by_key.clear()
+            self._by_service.clear()
+        for cr in items:
+            self._apply("ADDED", cr)
 
     def _apply(self, etype, cr):
         meta = cr.get("metadata") or {}
