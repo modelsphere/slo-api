@@ -118,9 +118,20 @@ class CRIndex:
 
     def _watch_once(self):
         api = self._api_client()
+        # List first, then watch from the list's resourceVersion. A bare watch only marks the index
+        # synced on its first event, and with no CRs in the cluster there is none: the API server
+        # sends no ADDED event and its first BOOKMARK can take minutes, so readiness stayed 503 and
+        # the liveness probe killed the pod before it ever served. An empty list is a complete one.
+        listing = api.list_cluster_custom_object(group(), VERSION, PLURAL)
+        self._replace((listing or {}).get("items") or [])
+        self._synced.set()
+        rv = ((listing or {}).get("metadata") or {}).get("resourceVersion")
+
         wf = self._watch_factory or watch.Watch
         w = wf()
         kwargs = {} if self._watch_factory else {"allow_watch_bookmarks": True}
+        if rv and not self._watch_factory:
+            kwargs["resource_version"] = rv
         try:
             for event in w.stream(
                     api.list_cluster_custom_object,
@@ -141,6 +152,25 @@ class CRIndex:
             stop = getattr(w, "stop", None)
             if callable(stop):
                 stop()
+
+    def _replace(self, items):
+        """Rebuild the index from a full list: drops CRs deleted while no watch was running.
+
+        Built aside and swapped in under the lock, so a reader sees the old index or the new one,
+        never the empty or half-built one in between -- this runs on every watch reconnect."""
+        by_key, by_service = {}, {}
+        for cr in items:
+            meta = cr.get("metadata") or {}
+            ns, name = meta.get("namespace"), meta.get("name")
+            if not ns or not name:
+                continue
+            sid = (cr.get("spec") or {}).get("serviceId") or ""
+            by_key[(ns, name)] = cr
+            lst = by_service.setdefault(sid, [])
+            if (ns, name) not in lst:
+                lst.append((ns, name))
+        with self._lock:
+            self._by_key, self._by_service = by_key, by_service
 
     def _apply(self, etype, cr):
         meta = cr.get("metadata") or {}
