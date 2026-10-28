@@ -154,12 +154,23 @@ class CRIndex:
                 stop()
 
     def _replace(self, items):
-        """Rebuild the index from a full list: drops CRs deleted while no watch was running."""
-        with self._lock:
-            self._by_key.clear()
-            self._by_service.clear()
+        """Rebuild the index from a full list: drops CRs deleted while no watch was running.
+
+        Built aside and swapped in under the lock, so a reader sees the old index or the new one,
+        never the empty or half-built one in between -- this runs on every watch reconnect."""
+        by_key, by_service = {}, {}
         for cr in items:
-            self._apply("ADDED", cr)
+            meta = cr.get("metadata") or {}
+            ns, name = meta.get("namespace"), meta.get("name")
+            if not ns or not name:
+                continue
+            sid = (cr.get("spec") or {}).get("serviceId") or ""
+            by_key[(ns, name)] = cr
+            lst = by_service.setdefault(sid, [])
+            if (ns, name) not in lst:
+                lst.append((ns, name))
+        with self._lock:
+            self._by_key, self._by_service = by_key, by_service
 
     def _apply(self, etype, cr):
         meta = cr.get("metadata") or {}

@@ -49,3 +49,22 @@ def test_list_fills_the_index_before_any_watch_event():
         assert idx.list_routes() == ["route-a", "route-b"]
     finally:
         idx.stop()
+
+
+def test_relist_never_shows_an_empty_index():
+    """A watch reconnect re-lists and rebuilds the index. Readers in between must keep seeing the
+    old index, not a cleared or half-built one."""
+    api = FakeCustomObjectsApi()
+    old = [CRD_TEMPLATE("ns1", "a", "route-a"), CRD_TEMPLATE("ns2", "b", "route-b")]
+    idx = _index(api)
+    idx._replace(old)
+    seen = []
+
+    def relisted():
+        for cr in old + [CRD_TEMPLATE("ns3", "c", "route-c")]:
+            seen.append(idx.list_routes())   # what a reader sees while the rebuild is under way
+            yield cr
+
+    idx._replace(relisted())
+    assert all(s == ["route-a", "route-b"] for s in seen), seen
+    assert idx.list_routes() == ["route-a", "route-b", "route-c"]
