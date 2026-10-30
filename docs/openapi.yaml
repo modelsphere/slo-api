@@ -1,0 +1,475 @@
+openapi: 3.1.0
+info:
+  title: slo-api
+  version: 0.2.1
+  summary: Read and change the SLO of an LLM inference service by its route.
+  description: |
+    slo-api is a front door onto `LLMSLORequirement` custom resources, which
+    slo-scaler-decision-gen reads to size each service. Callers address a
+    service by its route and send plain JSON; they never see a namespace, a CR
+    name or a kubeconfig.
+
+    ```
+    client -- Bearer token --> slo-api --> LLMSLORequirement CRs --> decision-gen
+                               (patch only; never creates or deletes a CR)
+    ```
+
+    ## Routes
+
+    A route is a CR's `spec.serviceId`. The CR's lifecycle belongs to whatever
+    deployed the service (for swiss, the chart at install, with the release
+    name as the serviceId). Here a route is only read and patched:
+
+    - An unknown route is `404`, for writes too. Nothing here creates a CR.
+    - A serviceId found in more than one namespace is `409` for reads and
+      writes alike, with the candidates in `error.details`.
+
+    ## Readiness
+
+    Routes resolve against an in-memory index fed by a watch on the CRs. Until
+    its first list completes, every route is `404` and the list is empty.
+    `GET /readyz` tells "not synced yet" (`503`) from "not registered".
+
+    ## Fields
+
+    slo-api owns five fields of the CR spec: `priority`, `minimumDeployment`,
+    `maximumDeployment`, `ttft` and `otps`. Every other field, written by other
+    controllers, survives a write. `priority` (0-10 in the CR) is exposed as
+    the boolean `highPriority`.
+
+    ## Errors
+
+    Errors are `{"error": {"code", "message", "field"?, "details"?}}`. A method
+    other than `GET`, `PUT` and `DELETE` gets `501` from the HTTP server itself,
+    with an HTML body. Unknown paths need the token too: `401` before `404`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: http://slo-api.llm-scaler.svc
+    description: In cluster, the Service the llm-slo-decision-gen chart creates (port 80).
+  - url: http://localhost:8080
+    description: Run locally (`PORT`, default 8080).
+
+security:
+  - bearer: []
+
+tags:
+  - name: config
+    description: SLO requirements, by route.
+  - name: health
+    description: Probes. No token.
+
+paths:
+  /config:
+    get:
+      tags: [config]
+      summary: List routes
+      description: |
+        Routes in name order, read from the watch index rather than the API
+        server. Items leave out `ttft` and `otps`; read one route for those.
+
+        A route found in more than one namespace counts in `total` but is left
+        out of `items`, so a page can be shorter than `pageSize`.
+      operationId: listConfigs
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+        - $ref: "#/components/parameters/requestId"
+      responses:
+        "200":
+          description: One page of routes.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/requestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigPage" }
+              example:
+                page: 1
+                pageSize: 20
+                total: 1
+                items:
+                  - route: my-model
+                    highPriority: true
+                    minimumDeployment: { type: replica, value: 1 }
+                    maximumDeployment: { type: replica, value: 2 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /config/{route}:
+    parameters:
+      - $ref: "#/components/parameters/route"
+      - $ref: "#/components/parameters/requestId"
+    get:
+      tags: [config]
+      summary: Read a route's SLO
+      description: Read from the API server, not the watch cache, so a write is visible to the next read.
+      operationId: getConfig
+      responses:
+        "200":
+          description: The route's SLO.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/requestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLOConfig" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Ambiguous" }
+        "502": { $ref: "#/components/responses/Upstream" }
+    put:
+      tags: [config]
+      summary: Change a route's SLO
+      description: |
+        Each field in the body replaces its stored value; a field left out keeps
+        its value. A field cannot be cleared on its own (`null` is rejected):
+        `DELETE` resets all five.
+
+        The write is a JSON merge patch, so inside `ttft` and `otps` a `ranges`
+        left out of the body is kept in the CR, though the response leaves it
+        out. Send `"ranges": []` to drop them.
+
+        The body is merged onto the CR as read from the API server just before
+        the write, so a concurrent change to another field is not reverted.
+        `spec.serviceId` is kept.
+
+        The CRD's own rules, such as `minimumDeployment.value` at most
+        `maximumDeployment.value`, are checked by the API server. A body that
+        breaks one comes back as `502`, not `400`.
+      operationId: putConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SLOEdit" }
+            example:
+              highPriority: true
+              minimumDeployment: { type: replica, value: 1 }
+              maximumDeployment: { type: replica, value: 2 }
+              ttft:
+                default:
+                  metrics: [{ type: p80, threshold: 20.0 }]
+              otps:
+                default:
+                  metrics: [{ type: p80, threshold: 30.0 }]
+      responses:
+        "200":
+          description: The SLO as written. Built from the write, not read back.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/requestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SLOConfig" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Ambiguous" }
+        "502": { $ref: "#/components/responses/Upstream" }
+    delete:
+      tags: [config]
+      summary: Reset a route's SLO
+      description: |
+        Resets the five fields to the CRD defaults; the CR stays. `priority`
+        becomes 0 and `minimumDeployment` `{type: replica, value: 1}`;
+        `maximumDeployment`, `ttft` and `otps` are removed.
+
+        decision-gen treats a requirement with no `maximumDeployment` as opted
+        out of autoscaling, so after a reset it stops sizing the service.
+      operationId: resetConfig
+      responses:
+        "204":
+          description: Reset.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/requestId" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Ambiguous" }
+        "502": { $ref: "#/components/responses/Upstream" }
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness
+      description: "`/health` is an alias."
+      operationId: healthz
+      security: []
+      responses:
+        "200":
+          description: The process is serving.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+              example: { status: ok }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness
+      description: Ready once the CR watch has completed its first list.
+      operationId: readyz
+      security: []
+      responses:
+        "200":
+          description: Synced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+              example: { status: ok }
+        "503":
+          description: Not synced yet. Routes answer `404` until it is.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+              example: { status: not_ready, reason: cr watch not synced }
+
+  /demo-webui:
+    get:
+      tags: [health]
+      summary: Demo form
+      description: |
+        A static page for trying the API from a browser. The page is public; its
+        calls send the token typed into it. `/demo-webui/index.html` is an alias.
+      operationId: demoWebUI
+      security: []
+      responses:
+        "200":
+          description: The page.
+          content:
+            text/html:
+              schema: { type: string }
+        "503":
+          description: The page is missing from the image.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: The token in `SLO_API_TOKEN`; the chart keeps it in the `slo-api` Secret under `token`.
+
+  parameters:
+    route:
+      name: route
+      in: path
+      required: true
+      description: The service's route, its CR's `spec.serviceId`. Percent-decoded before lookup.
+      schema: { type: string }
+      example: my-model
+    requestId:
+      name: X-Request-Id
+      in: header
+      description: Echoed on the response.
+      schema: { type: string }
+
+  headers:
+    requestId:
+      description: The request's `X-Request-Id`, when it sent one.
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: The body or a query parameter is invalid; `field` names the offending one.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: { code: invalid_request, message: "highPriority must be a boolean", field: highPriority }
+    Unauthorized:
+      description: The bearer token is missing or wrong.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: { code: unauthorized, message: invalid token }
+    NotFound:
+      description: No CR has this route, or it was deleted between lookup and read.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: { code: not_found, message: "route 'ghost' not registered" }
+    Ambiguous:
+      description: The route is the serviceId of CRs in more than one namespace.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error:
+              code: conflict
+              message: "route 'my-model' maps to multiple LLMSLORequirement CRs; cannot auto-select a target"
+              details:
+                - { namespace: team-a, name: my-model }
+                - { namespace: team-b, name: my-model }
+    Upstream:
+      description: The Kubernetes API server failed or refused the call.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error: { code: upstream_error, message: "kubernetes patch failed: Unprocessable Entity" }
+
+  schemas:
+    SLOConfig:
+      type: object
+      description: A route's SLO as the CR holds it. A field the CR does not set is absent.
+      required: [route, highPriority]
+      properties:
+        route: { type: string }
+        highPriority:
+          type: boolean
+          description: "`priority` is 10. Any other priority, 0-9, reads as false."
+        minimumDeployment: { $ref: "#/components/schemas/Bound" }
+        maximumDeployment:
+          $ref: "#/components/schemas/Bound"
+          description: Absent means decision-gen does not autoscale the service.
+        ttft: { $ref: "#/components/schemas/TTFT" }
+        otps: { $ref: "#/components/schemas/OTPS" }
+
+    SLOSummary:
+      type: object
+      description: A list item. `ttft` and `otps` are left out.
+      required: [route, highPriority]
+      properties:
+        route: { type: string }
+        highPriority: { type: boolean }
+        minimumDeployment: { $ref: "#/components/schemas/Bound" }
+        maximumDeployment: { $ref: "#/components/schemas/Bound" }
+
+    ConfigPage:
+      type: object
+      required: [page, pageSize, total, items]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 200 }
+        total: { type: integer, minimum: 0, description: "Every indexed route, ambiguous ones included." }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SLOSummary" }
+
+    SLOEdit:
+      type: object
+      description: The fields to change. Unknown fields are rejected.
+      additionalProperties: false
+      properties:
+        route:
+          type: string
+          description: Optional. When sent, it must equal the path's route.
+        highPriority:
+          type: boolean
+          description: true writes `priority` 10, false writes 0.
+        minimumDeployment:
+          type: object
+          required: [value]
+          properties:
+            type: { type: string, enum: [replica, concurrency], default: replica }
+            value: { type: integer, minimum: 1 }
+        maximumDeployment:
+          type: object
+          required: [value]
+          properties:
+            type: { type: string, enum: [replica], default: replica }
+            value: { type: integer, minimum: 1 }
+        ttft: { $ref: "#/components/schemas/TTFT" }
+        otps: { $ref: "#/components/schemas/OTPS" }
+
+    Bound:
+      type: object
+      description: A replica bound as stored. The CRD allows 0 (scale to zero), which this API does not write.
+      properties:
+        type: { type: string, enum: [replica, concurrency] }
+        value: { type: integer, minimum: 0 }
+
+    TTFT:
+      description: |
+        Time to first token, a ceiling in seconds: a metric is violated when the
+        measured value is above its threshold.
+      allOf:
+        - $ref: "#/components/schemas/SLOSection"
+
+    OTPS:
+      description: |
+        Output tokens per second per request, a floor: a metric is violated when
+        the measured value is below its threshold. `pN` means N% of requests
+        must beat the threshold.
+      allOf:
+        - $ref: "#/components/schemas/SLOSection"
+
+    SLOSection:
+      type: object
+      additionalProperties: false
+      required: [default]
+      properties:
+        default:
+          $ref: "#/components/schemas/MetricGroup"
+          description: The metrics applied when a request falls in no range.
+        ranges:
+          type: array
+          description: Metrics per context-length range. Stored for decision-gen, which today sizes on `default` only.
+          items: { $ref: "#/components/schemas/Range" }
+
+    MetricGroup:
+      type: object
+      required: [metrics]
+      properties:
+        metrics:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Metric" }
+
+    Range:
+      type: object
+      required: [contextLengthRangeLow, metrics]
+      properties:
+        contextLengthRangeLow: { type: integer, minimum: 0 }
+        contextLengthRangeHigh: { type: integer, minimum: 1, description: Absent means no upper bound. }
+        metrics:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Metric" }
+
+    Metric:
+      type: object
+      required: [type, threshold]
+      properties:
+        type: { type: string, enum: [avg, p50, p80, p90, p95, p99] }
+        threshold: { type: number, minimum: 0, description: Returned as a float. }
+
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, not_ready] }
+        reason: { type: string }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [unauthorized, invalid_request, not_found, conflict, upstream_error]
+            message: { type: string }
+            field:
+              type: string
+              description: The offending field, as a path such as `ttft.default.metrics[0].threshold`.
+            details:
+              type: array
+              description: For `conflict`, the CRs the route matches.
+              items:
+                type: object
+                required: [namespace, name]
+                properties:
+                  namespace: { type: string }
+                  name: { type: string }
