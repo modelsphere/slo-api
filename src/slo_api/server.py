@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse, unquote
 
 from kubernetes.client import ApiException
 
-from slo_api import PLURAL, VERSION, group
+from slo_api import VERSION, group
 from slo_api.translate import (
     ValidationError, api_to_spec, merge_spec, spec_to_api,
 )
@@ -46,6 +46,21 @@ def _error(status, code, message, field=None, details=None):
     if details:
         body["error"]["details"] = details
     return status, body
+
+
+def _invalid(e):
+    """400 for a 422 from the API server. Built from the Status causes, not
+    its message, which leads with the CR's kind and name; a lone cause's
+    field (`spec.x.y`) becomes the API's own path (`x.y`)."""
+    try:
+        causes = json.loads(e.body)["details"]["causes"]
+        message = "; ".join(c["message"] for c in causes)
+    except (TypeError, ValueError, KeyError):
+        return _error(400, "invalid_request",
+                      f"kubernetes rejected the update: {e.reason}")
+    field = causes[0].get("field", "") if len(causes) == 1 else ""
+    return _error(400, "invalid_request", message,
+                  field=field.removeprefix("spec.") if field != "spec" else None)
 
 
 def make_handler(index, api, auth_token):
@@ -170,10 +185,10 @@ def make_handler(index, api, auth_token):
             if status == "ambiguous":
                 return _error(
                     409, "conflict",
-                    f"route '{route}' maps to multiple LLMSLORequirement CRs; "
+                    f"route '{route}' maps to multiple SLO requirement CRs; "
                     "cannot auto-select a target",
                     details=[{"namespace": ns, "name": n}
-                             for ns, n in payload]), None
+                             for _, ns, n in payload]), None
             return None, payload
 
         # ---------- handlers ----------
@@ -181,19 +196,19 @@ def make_handler(index, api, auth_token):
         def _handle_get(self, route):
             err, target = self._resolve(route)
             if err: return self._respond(*err)
-            ns, name, _ = target
-            cr, gerr = self._fresh_get(ns, name, route)
+            plural, ns, name, _ = target
+            cr, gerr = self._fresh_get(plural, ns, name, route)
             if gerr: return self._respond(*gerr)
             return self._respond(200, spec_to_api(route, cr.get("spec") or {}))
 
-        def _fresh_get(self, ns, name, route):
+        def _fresh_get(self, plural, ns, name, route):
             """Read the CR from the apiserver, bypassing the watch cache.
             Guarantees read-after-write consistency: callers that just
             modified the resource see their own writes. Returns
             (cr_dict, None) on success, (None, error_tuple) on failure."""
             try:
                 cr = api.get_namespaced_custom_object(
-                    group(), VERSION, ns, PLURAL, name)
+                    group(), VERSION, ns, plural, name)
                 return cr, None
             except ApiException as e:
                 if e.status == 404:
@@ -206,7 +221,7 @@ def make_handler(index, api, auth_token):
         def _handle_put(self, route):
             err, target = self._resolve(route)
             if err: return self._respond(*err)
-            ns, name, _ = target
+            plural, ns, name, _ = target
 
             body, perr = self._read_json()
             if perr: return self._respond(*perr)
@@ -217,14 +232,14 @@ def make_handler(index, api, auth_token):
                     400, "invalid_request",
                     "body route does not match URL", field="route"))
             try:
-                update = api_to_spec(body)
+                update = api_to_spec(body, plural)
             except ValidationError as e:
                 return self._respond(*_error(
                     400, "invalid_request", e.message, field=e.field))
 
             # Read the live CR (not the watch cache) so we merge over the
             # freshest state and never silently revert a concurrent write.
-            cr, gerr = self._fresh_get(ns, name, route)
+            cr, gerr = self._fresh_get(plural, ns, name, route)
             if gerr: return self._respond(*gerr)
             existing = cr.get("spec") or {}
             merged = merge_spec(existing, update)
@@ -232,7 +247,7 @@ def make_handler(index, api, auth_token):
 
             try:
                 api.patch_namespaced_custom_object(
-                    group(), VERSION, ns, PLURAL, name,
+                    group(), VERSION, ns, plural, name,
                     {"spec": merged},
                 )
             except ApiException as e:
@@ -241,6 +256,10 @@ def make_handler(index, api, auth_token):
                     return self._respond(*_error(
                         404, "not_found",
                         f"CR for route '{route}' disappeared during update"))
+                if e.status == 422:
+                    # The CRD's own rules (CEL) rejected the merged spec, e.g.
+                    # min/max bound types that differ: the caller's to fix.
+                    return self._respond(*_invalid(e))
                 return self._respond(*_error(
                     502, "upstream_error",
                     f"kubernetes patch failed: {e.reason}"))
@@ -252,17 +271,19 @@ def make_handler(index, api, auth_token):
         def _handle_delete(self, route):
             err, target = self._resolve(route)
             if err: return self._respond(*err)
-            ns, name, _ = target
+            plural, ns, name, _ = target
 
             # Read the live CR (not the watch cache) so we know exactly
             # which SLO fields exist and need nulling out.
-            cr, gerr = self._fresh_get(ns, name, route)
+            cr, gerr = self._fresh_get(plural, ns, name, route)
             if gerr: return self._respond(*gerr)
 
             # Reset SLO-owned fields to their CRD defaults. priority and
             # minimumDeployment have explicit CRD defaults; the other
             # three have none, so "reset" = absent. JSON merge-patch only
-            # removes keys sent explicitly as null.
+            # removes keys sent explicitly as null, and nulls a key the CR
+            # does not have as a no-op: on a JobSLORequirement ttft/otps are
+            # nothing, and its queue (required, no default) is kept.
             patch = {"spec": {
                 "priority": 0,
                 "minimumDeployment": {"type": "replica", "value": 1},
@@ -273,7 +294,7 @@ def make_handler(index, api, auth_token):
 
             try:
                 api.patch_namespaced_custom_object(
-                    group(), VERSION, ns, PLURAL, name, patch,
+                    group(), VERSION, ns, plural, name, patch,
                 )
             except ApiException as e:
                 log.warning("reset %s/%s failed: %s %s", ns, name, e.status, e.reason)
@@ -310,10 +331,10 @@ def make_handler(index, api, auth_token):
                     # not 500'd — list offers a "what exists" view, not
                     # target resolution
                     continue
-                _, _, cr = payload
+                *_, cr = payload
                 summary = spec_to_api(r, cr.get("spec") or {})
-                summary.pop("ttft", None)
-                summary.pop("otps", None)
+                for key in ("ttft", "otps", "queue"):
+                    summary.pop(key, None)
                 items.append(summary)
 
             return self._respond(200, {

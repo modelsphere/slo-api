@@ -3,38 +3,45 @@ import threading
 
 import pytest
 
+from slo_api import JOB_PLURAL, LLM_PLURAL
 from slo_api.cr_index import CRIndex
 
 
-CRD_TEMPLATE = lambda ns, name, sid, extra_spec=None: {
+PLURAL_OF = {"LLMSLORequirement": LLM_PLURAL, "JobSLORequirement": JOB_PLURAL}
+
+CRD_TEMPLATE = lambda ns, name, sid, extra_spec=None, kind="LLMSLORequirement": {
     "apiVersion": "inference.modelsphere.dev/v1alpha1",
-    "kind": "LLMSLORequirement",
+    "kind": kind,
     "metadata": {"namespace": ns, "name": name, "resourceVersion": "1"},
     "spec": {"serviceId": sid, **(extra_spec or {})},
 }
 
 
 class FakeCustomObjectsApi:
-    """In-memory CustomObjectsApi for tests."""
+    """In-memory CustomObjectsApi for tests. A plural in `missing` has no CRD: 404."""
 
-    def __init__(self):
+    def __init__(self, missing=()):
         self._lock = threading.Lock()
-        self._store = {}  # (ns, name) -> CR
+        self._store = {}  # (plural, ns, name) -> CR
+        self.missing = set(missing)
 
     def seed(self, cr):
         ns = cr["metadata"]["namespace"]
         name = cr["metadata"]["name"]
         with self._lock:
-            self._store[(ns, name)] = copy.deepcopy(cr)
+            self._store[(PLURAL_OF[cr["kind"]], ns, name)] = copy.deepcopy(cr)
 
     def list_cluster_custom_object(self, group, version, plural, **kw):
+        if plural in self.missing:
+            from kubernetes.client import ApiException
+            raise ApiException(status=404, reason="Not Found")
         with self._lock:
-            items = [copy.deepcopy(c) for c in self._store.values()]
+            items = [copy.deepcopy(c) for k, c in self._store.items() if k[0] == plural]
         return {"items": items}
 
     def get_namespaced_custom_object(self, group, version, ns, plural, name):
         with self._lock:
-            cr = self._store.get((ns, name))
+            cr = self._store.get((plural, ns, name))
             if cr is None:
                 from kubernetes.client import ApiException
                 raise ApiException(status=404, reason="Not Found")
@@ -52,7 +59,7 @@ class FakeCustomObjectsApi:
                     dst[k] = v
 
         with self._lock:
-            cr = self._store.get((ns, name))
+            cr = self._store.get((plural, ns, name))
             if cr is None:
                 from kubernetes.client import ApiException
                 raise ApiException(status=404, reason="Not Found")
@@ -70,9 +77,9 @@ class FakeWatch:
         self._api = api
         self._outer_stop = outer_stop
 
-    def stream(self, fn, *args, **kwargs):
+    def stream(self, fn, group, version, plural, **kwargs):
         import time
-        for cr in self._api.list_cluster_custom_object("", "", "")["items"]:
+        for cr in self._api.list_cluster_custom_object(group, version, plural)["items"]:
             yield {"type": "ADDED", "object": cr}
         # BOOKMARK signals end-of-initial-list; index uses it to mark synced
         yield {"type": "BOOKMARK", "object": {}}

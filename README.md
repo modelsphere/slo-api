@@ -3,7 +3,8 @@
 A small HTTP API for reading and changing the SLO of an LLM inference service,
 without handing the caller access to Kubernetes.
 
-The SLO itself lives in an `LLMSLORequirement` custom resource, which
+The SLO itself lives in an `LLMSLORequirement` custom resource (or a
+`JobSLORequirement`, for a queue-driven job service), which
 [slo-scaler-decision-gen](https://github.com/modelsphere/slo-scaler-decision-gen)
 reads to decide replica counts. slo-api is a front door onto those resources:
 callers address a service by its route name, send plain JSON, and never see a
@@ -21,11 +22,11 @@ namespace, a CR name or a kubeconfig.
   the service. The RBAC in `config/rbac/` grants exactly
   `get / list / watch / patch / update` and nothing else.
 - **It only touches the SLO fields** — `priority`, `minimumDeployment`,
-  `maximumDeployment`, `ttft`, `otps`. Anything else in the spec, written by
-  other controllers, survives a write.
-- **A route resolves through `spec.serviceId`.** If two namespaces have a CR with
-  the same `serviceId`, writes are refused with `409` rather than guessing; reads
-  return the first one seen.
+  `maximumDeployment`, `ttft`, `otps` (`queue` on a job route). Anything else in
+  the spec, written by other controllers, survives a write.
+- **A route resolves through `spec.serviceId`**, across both kinds. If two CRs
+  have the same `serviceId` (two namespaces, or one of each kind), reads and
+  writes are refused with `409` rather than guessing.
 - Writes merge onto the **live** CR, read fresh from the API server rather than
   from the watch cache, so a concurrent change is not silently reverted.
 
@@ -56,8 +57,25 @@ boolean:
 }
 ```
 
-`highPriority: true` writes `priority: 10`; `false` writes `0`. Metric types are
-`avg`, `p50`, `p80`, `p90`, `p95`, `p99`. Errors come back as
+`highPriority: true` writes `priority: 10`; `false` writes `0`. A bound's
+`value` may be 0: `{min: 0, max: 0}` turns the service off (scale-to-zero). Metric types are
+`avg`, `p50`, `p80`, `p90`, `p95`, `p99`. A bound's `type` is `replica`,
+`concurrency` (minimum only) or `pdengine` (a PD service's bounds counted in
+prefill + decode engines; both bounds must then be `pdengine`).
+
+A route backed by a `JobSLORequirement` has `queue` in place of `ttft` and
+`otps`, and its bounds are `replica` only (`concurrency` for the minimum):
+
+```json
+{"route": "img-gen", "queue": {"maxDepth": 8, "promql": "sum(jobs_pending{service=\"img-gen\"})"}}
+```
+
+`queue.promql` may be left out of a `PUT` to keep the CR's own. `DELETE` keeps
+`queue` (the CRD requires it) and resets the rest.
+
+The CRD's own cross-field rules (minimum at most maximum, matching bound types,
+...) are checked by the API server against the merged spec; a write that breaks
+one is `400` with the API server's message. Errors come back as
 `{"error": {"code", "message", "field"}}`, and an `X-Request-Id` header on the
 request is echoed on the response.
 

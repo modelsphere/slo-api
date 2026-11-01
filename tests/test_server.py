@@ -8,6 +8,7 @@ import urllib.error
 import pytest
 
 from slo_api.server import serve
+from slo_api import JOB_PLURAL, LLM_PLURAL
 from tests.conftest import CRD_TEMPLATE, FakeWatch
 from slo_api.cr_index import CRIndex
 
@@ -120,7 +121,7 @@ def test_get_returns_full_config(running_server):
     spec = {k: v for k, v in BASE_CR_SPEC.items() if k != "serviceId"}
     cr = CRD_TEMPLATE("kimi", "kimi-k25", "kimi-k2.5", extra_spec=spec)
     api.seed(cr)
-    idx._apply("ADDED", cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
 
     st, body = _req("GET", f"{url}/config/kimi-k2.5")
     assert st == 200
@@ -152,7 +153,7 @@ def test_put_validation_error_returns_400(running_server):
     url, api, idx = running_server
     cr = CRD_TEMPLATE("kimi", "kimi-k25", "kimi-k2.5")
     api.seed(cr)
-    idx._apply("ADDED", cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
 
     st, body = _req("PUT", f"{url}/config/kimi-k2.5",
                     body={"highPriority": "yes"})
@@ -167,7 +168,7 @@ def test_put_updates_priority_and_preserves_foreign_fields(running_server):
         "someForeignField": {"keep": "me"},
     })
     api.seed(cr)
-    idx._apply("ADDED", cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
 
     body = {
         "highPriority": True,
@@ -193,7 +194,7 @@ def test_put_body_route_mismatch_returns_400(running_server):
     url, api, idx = running_server
     cr = CRD_TEMPLATE("kimi", "kimi-k25", "kimi-k2.5")
     api.seed(cr)
-    idx._apply("ADDED", cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
 
     st, body = _req("PUT", f"{url}/config/kimi-k2.5",
                     body={"route": "other", "highPriority": True})
@@ -218,7 +219,7 @@ def test_delete_resets_slo_fields_keeps_cr(running_server):
         "someForeignField": {"keep": "me"},
     })
     api.seed(cr)
-    idx._apply("ADDED", cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
 
     st, _ = _req("DELETE", f"{url}/config/kimi-k2.5")
     assert st == 204
@@ -261,7 +262,7 @@ def test_list_pagination_and_summary_shape(running_server):
             "maximumDeployment": {"type": "replica", "value": i + 5},
         })
         api.seed(cr)
-        idx._apply("ADDED", cr)
+        idx._apply(LLM_PLURAL, "ADDED", cr)
 
     st, body = _req("GET", f"{url}/config?page=1&pageSize=2")
     assert st == 200
@@ -297,7 +298,7 @@ def test_ambiguous_route_returns_409(running_server):
     cr1 = CRD_TEMPLATE("ns-a", "k25", "kimi-k2.5")
     cr2 = CRD_TEMPLATE("ns-b", "k25", "kimi-k2.5")
     api.seed(cr1); api.seed(cr2)
-    idx._apply("ADDED", cr1); idx._apply("ADDED", cr2)
+    idx._apply(LLM_PLURAL, "ADDED", cr1); idx._apply(LLM_PLURAL, "ADDED", cr2)
 
     st, body = _req("GET", f"{url}/config/kimi-k2.5")
     assert st == 409
@@ -306,3 +307,122 @@ def test_ambiguous_route_returns_409(running_server):
     st, _ = _req("PUT", f"{url}/config/kimi-k2.5",
                  body={"highPriority": True})
     assert st == 409
+
+
+# ---------- JobSLORequirement ----------
+
+JOB_SPEC = {
+    "priority": 0,
+    "minimumDeployment": {"type": "replica", "value": 1},
+    "maximumDeployment": {"type": "replica", "value": 4},
+    "queue": {"maxDepth": 8, "promql": 'sum(jobs_pending{service="img"})'},
+}
+
+
+def _seed_job(api, idx, sid="img-gen"):
+    cr = CRD_TEMPLATE("jobs", "img", sid, extra_spec=JOB_SPEC, kind="JobSLORequirement")
+    api.seed(cr)
+    idx._apply(JOB_PLURAL, "ADDED", cr)
+
+
+def _job_cr(api):
+    return api.get_namespaced_custom_object(
+        "inference.modelsphere.dev", "v1alpha1", "jobs", JOB_PLURAL, "img")
+
+
+def test_job_route_get_put_keeps_promql(running_server):
+    url, api, idx = running_server
+    _seed_job(api, idx)
+
+    st, body = _req("GET", f"{url}/config/img-gen")
+    assert st == 200
+    assert body["queue"] == JOB_SPEC["queue"]
+
+    st, body = _req("PUT", f"{url}/config/img-gen", body={"queue": {"maxDepth": 2}})
+    assert st == 200, body
+    assert _job_cr(api)["spec"]["queue"] == {
+        "maxDepth": 2, "promql": JOB_SPEC["queue"]["promql"]}
+
+
+def test_job_route_rejects_llm_fields(running_server):
+    url, api, idx = running_server
+    _seed_job(api, idx)
+    st, body = _req("PUT", f"{url}/config/img-gen", body={
+        "otps": {"default": {"metrics": [{"type": "p80", "threshold": 1}]}}})
+    assert st == 400
+    st, body = _req("PUT", f"{url}/config/img-gen", body={
+        "maximumDeployment": {"type": "pdengine", "value": 4}})
+    assert st == 400
+    assert body["error"]["field"] == "maximumDeployment.type"
+
+
+def test_job_route_delete_keeps_queue(running_server):
+    url, api, idx = running_server
+    _seed_job(api, idx)
+    st, _ = _req("DELETE", f"{url}/config/img-gen")
+    assert st == 204
+    spec = _job_cr(api)["spec"]
+    assert spec["queue"] == JOB_SPEC["queue"]
+    assert "maximumDeployment" not in spec
+
+
+def test_list_includes_job_routes_without_queue(running_server):
+    url, api, idx = running_server
+    _seed_job(api, idx)
+    st, body = _req("GET", f"{url}/config")
+    assert st == 200
+    assert [it["route"] for it in body["items"]] == ["img-gen"]
+    assert "queue" not in body["items"][0]
+
+
+def test_route_shared_by_both_kinds_is_ambiguous(running_server):
+    url, api, idx = running_server
+    _seed_job(api, idx, sid="kimi-k2.5")
+    cr = CRD_TEMPLATE("kimi", "kimi-k25", "kimi-k2.5")
+    api.seed(cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
+    st, body = _req("GET", f"{url}/config/kimi-k2.5")
+    assert st == 409
+    assert len(body["error"]["details"]) == 2
+
+
+# ---------- CRD rules ----------
+
+def _reject_with(api, causes):
+    """Make the fake API server answer patches the way it does when the CRD rejects the spec."""
+    from kubernetes.client import ApiException
+    def reject(*a, **kw):
+        e = ApiException(status=422, reason="Unprocessable Entity")
+        e.body = json.dumps({
+            "kind": "Status", "code": 422, "reason": "Invalid",
+            "message": 'LLMSLORequirement.inference.modelsphere.dev "kimi-k25" is invalid: ...',
+            "details": {"name": "kimi-k25", "causes": causes},
+        })
+        raise e
+    api.patch_namespaced_custom_object = reject
+
+
+@pytest.mark.parametrize("cause,field", [
+    # CEL rule on the merged spec: no single field to blame.
+    ({"reason": "FieldValueInvalid", "field": "spec",
+      "message": 'Invalid value: "object": minimumDeployment.type and '
+                 'maximumDeployment.type must match'}, None),
+    # Schema enum, e.g. pdengine before the CRD has it: the field, in API terms.
+    ({"reason": "FieldValueNotSupported", "field": "spec.maximumDeployment.type",
+      "message": 'Unsupported value: "pdengine": supported values: "replica"'},
+     "maximumDeployment.type"),
+])
+def test_crd_rule_rejection_is_400_without_cr_name(running_server, cause, field):
+    url, api, idx = running_server
+    cr = CRD_TEMPLATE("kimi", "kimi-k25", "kimi-k2.5")
+    api.seed(cr)
+    idx._apply(LLM_PLURAL, "ADDED", cr)
+    _reject_with(api, [cause])
+
+    st, body = _req("PUT", f"{url}/config/kimi-k2.5", body={
+        "maximumDeployment": {"type": "pdengine", "value": 4}})
+    assert st == 400
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["message"] == cause["message"]
+    assert body["error"].get("field") == field
+    assert "kimi-k25" not in json.dumps(body)

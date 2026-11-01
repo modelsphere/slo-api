@@ -1,5 +1,6 @@
 import pytest
 
+from slo_api import JOB_PLURAL
 from slo_api.translate import (
     ValidationError, api_to_spec, merge_spec, spec_to_api,
 )
@@ -36,8 +37,15 @@ def test_maximum_deployment_rejects_concurrency():
     assert e.value.field == "maximumDeployment.type"
 
 
-def test_deployment_value_must_be_positive_int():
-    for bad in (0, -1, "two", 1.5, True):
+def test_deployment_value_zero_is_scale_to_zero():
+    spec = api_to_spec({"minimumDeployment": {"type": "replica", "value": 0},
+                        "maximumDeployment": {"type": "replica", "value": 0}})
+    assert spec["minimumDeployment"]["value"] == 0
+    assert spec["maximumDeployment"]["value"] == 0
+
+
+def test_deployment_value_must_be_non_negative_int():
+    for bad in (-1, "two", 1.5, True):
         with pytest.raises(ValidationError):
             api_to_spec({"minimumDeployment": {"type": "replica", "value": bad}})
 
@@ -162,3 +170,50 @@ def test_spec_to_api_roundtrip_full_body():
     spec["serviceId"] = "kimi-k2.5"
     out = spec_to_api("kimi-k2.5", spec)
     assert out == {"route": "kimi-k2.5", **body}
+
+
+# ---------- per kind ----------
+
+def test_pdengine_bounds_accepted_on_llm():
+    spec = api_to_spec({"minimumDeployment": {"type": "pdengine", "value": 2},
+                        "maximumDeployment": {"type": "pdengine", "value": 8}})
+    assert spec["maximumDeployment"] == {"type": "pdengine", "value": 8}
+
+
+def test_job_rejects_pdengine_and_llm_sections():
+    with pytest.raises(ValidationError) as e:
+        api_to_spec({"maximumDeployment": {"type": "pdengine", "value": 4}}, JOB_PLURAL)
+    assert e.value.field == "maximumDeployment.type"
+    with pytest.raises(ValidationError) as e:
+        api_to_spec({"ttft": {"default": {"metrics": [{"type": "p80", "threshold": 1}]}}},
+                    JOB_PLURAL)
+    assert "ttft" in e.value.message
+
+
+def test_llm_rejects_queue():
+    with pytest.raises(ValidationError):
+        api_to_spec({"queue": {"maxDepth": 4}})
+
+
+def test_job_queue_promql_optional():
+    assert api_to_spec({"queue": {"maxDepth": 0}}, JOB_PLURAL) == {"queue": {"maxDepth": 0}}
+    body = {"queue": {"maxDepth": 4, "promql": 'sum(jobs_pending{service="x"})'}}
+    assert api_to_spec(body, JOB_PLURAL) == body
+
+
+@pytest.mark.parametrize("queue,field", [
+    ({}, "queue.maxDepth"),
+    ({"maxDepth": -1}, "queue.maxDepth"),
+    ({"maxDepth": True}, "queue.maxDepth"),
+    ({"maxDepth": 1, "promql": " "}, "queue.promql"),
+    ({"maxDepth": 1, "extra": 1}, "queue"),
+])
+def test_job_queue_invalid(queue, field):
+    with pytest.raises(ValidationError) as e:
+        api_to_spec({"queue": queue}, JOB_PLURAL)
+    assert e.value.field == field
+
+
+def test_spec_to_api_includes_queue():
+    out = spec_to_api("j", {"serviceId": "j", "queue": {"maxDepth": 3, "promql": "q"}})
+    assert out["queue"] == {"maxDepth": 3, "promql": "q"}
