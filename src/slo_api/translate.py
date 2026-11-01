@@ -1,4 +1,4 @@
-"""Translate between the public API shape and the LLMSLORequirement CR spec.
+"""Translate between the public API shape and the SLO requirement CR spec.
 
 API shape (what clients see):
   {
@@ -11,6 +11,9 @@ API shape (what clients see):
     "otps": {...}
   }
 
+A JobSLORequirement route has `queue: {maxDepth, promql}` in place of
+`ttft` / `otps`.
+
 CRD shape uses `priority: int 0..10` and adds `serviceId`. Everything
 else is structurally identical. `highPriority=true`  ⇆ priority==10
 `highPriority=false` ⇆ priority in [0..9] (we write 0 on false).
@@ -18,7 +21,9 @@ else is structurally identical. `highPriority=true`  ⇆ priority==10
 
 import copy
 
-from slo_api import HIGH_PRIORITY_VALUE, LOW_PRIORITY_VALUE
+from slo_api import (
+    HIGH_PRIORITY_VALUE, JOB_PLURAL, LLM_PLURAL, LOW_PRIORITY_VALUE,
+)
 
 # Fields the API is authoritative for — everything else in the CR spec
 # is left untouched on write so out-of-band fields (owned by other
@@ -29,11 +34,19 @@ SLO_FIELDS = (
     "maximumDeployment",
     "ttft",
     "otps",
+    "queue",
 )
 
+# Per kind, as its CRD schema has them: the SLO sections of the spec and the
+# bound types. Cross-field rules (min/max types match, pdengine max != 1, ...)
+# are CEL on the CRD, checked by the API server against the merged spec.
+SECTIONS = {LLM_PLURAL: ("ttft", "otps"), JOB_PLURAL: ("queue",)}
+ALLOWED_DEPLOY_TYPES_MIN = {LLM_PLURAL: {"replica", "concurrency", "pdengine"},
+                            JOB_PLURAL: {"replica", "concurrency"}}
+ALLOWED_DEPLOY_TYPES_MAX = {LLM_PLURAL: {"replica", "pdengine"},
+                            JOB_PLURAL: {"replica"}}
+
 ALLOWED_METRIC_TYPES = {"avg", "p50", "p80", "p90", "p95", "p99"}
-ALLOWED_DEPLOY_TYPES_MIN = {"replica", "concurrency"}
-ALLOWED_DEPLOY_TYPES_MAX = {"replica"}  # CRD schema: maximumDeployment only supports replica
 
 
 class ValidationError(ValueError):
@@ -45,10 +58,11 @@ class ValidationError(ValueError):
 
 # ---------- API → CRD ----------
 
-def api_to_spec(body):
-    """Validate the API request body and return the SLO-owned slice of
-    the CR spec. The caller is responsible for merging onto the
-    existing spec (preserving foreign fields) or replacing wholesale.
+def api_to_spec(body, plural=LLM_PLURAL):
+    """Validate the API request body against the CR kind `plural` and
+    return the SLO-owned slice of the CR spec. The caller is responsible
+    for merging onto the existing spec (preserving foreign fields) or
+    replacing wholesale.
     """
     if not isinstance(body, dict):
         raise ValidationError("request body must be a JSON object")
@@ -64,20 +78,19 @@ def api_to_spec(body):
     if "minimumDeployment" in body:
         spec["minimumDeployment"] = _validate_deployment(
             body["minimumDeployment"], "minimumDeployment",
-            allowed_types=ALLOWED_DEPLOY_TYPES_MIN,
+            allowed_types=ALLOWED_DEPLOY_TYPES_MIN[plural],
         )
     if "maximumDeployment" in body:
         spec["maximumDeployment"] = _validate_deployment(
             body["maximumDeployment"], "maximumDeployment",
-            allowed_types=ALLOWED_DEPLOY_TYPES_MAX,
+            allowed_types=ALLOWED_DEPLOY_TYPES_MAX[plural],
         )
 
-    if "ttft" in body:
-        spec["ttft"] = _validate_slo_section(body["ttft"], "ttft")
-    if "otps" in body:
-        spec["otps"] = _validate_slo_section(body["otps"], "otps")
-
-    _reject_unknown_top_level(body)
+    _reject_unknown_top_level(body, SECTIONS[plural])
+    for key in SECTIONS[plural]:
+        if key in body:
+            validate = _validate_queue if key == "queue" else _validate_slo_section
+            spec[key] = validate(body[key], key)
     return spec
 
 
@@ -105,7 +118,7 @@ def spec_to_api(route, spec):
     priority = spec.get("priority", LOW_PRIORITY_VALUE)
     out["highPriority"] = (priority == HIGH_PRIORITY_VALUE)
 
-    for key in ("minimumDeployment", "maximumDeployment", "ttft", "otps"):
+    for key in SLO_FIELDS[1:]:  # all but priority, translated above
         if key in spec:
             out[key] = copy.deepcopy(spec[key])
     return out
@@ -113,9 +126,9 @@ def spec_to_api(route, spec):
 
 # ---------- validators ----------
 
-def _reject_unknown_top_level(body):
+def _reject_unknown_top_level(body, sections):
     allowed = {"route", "highPriority", "minimumDeployment",
-               "maximumDeployment", "ttft", "otps"}
+               "maximumDeployment", *sections}
     unknown = set(body) - allowed
     if unknown:
         raise ValidationError(
@@ -131,10 +144,35 @@ def _validate_deployment(value, field, allowed_types):
             f"{field}.type must be one of {sorted(allowed_types)}",
             f"{field}.type")
     dep_value = value.get("value")
-    if not isinstance(dep_value, int) or isinstance(dep_value, bool) or dep_value < 1:
+    # 0 is scale-to-zero; the CRD's CEL ties it to a maximum of 0 too.
+    if not isinstance(dep_value, int) or isinstance(dep_value, bool) or dep_value < 0:
         raise ValidationError(
-            f"{field}.value must be an integer >= 1", f"{field}.value")
+            f"{field}.value must be an integer >= 0", f"{field}.value")
     return {"type": dep_type, "value": dep_value}
+
+
+def _validate_queue(value, field):
+    if not isinstance(value, dict):
+        raise ValidationError(f"{field} must be an object", field)
+    unknown = set(value) - {"maxDepth", "promql"}
+    if unknown:
+        raise ValidationError(
+            f"{field}: unknown field(s): {', '.join(sorted(unknown))}",
+            field)
+    depth = value.get("maxDepth")
+    if not isinstance(depth, int) or isinstance(depth, bool) or depth < 0:
+        raise ValidationError(
+            f"{field}.maxDepth must be an integer >= 0", f"{field}.maxDepth")
+    out = {"maxDepth": depth}
+    # Optional: the write is a merge patch, so a promql left out keeps the
+    # CR's own (which the CRD requires).
+    if "promql" in value:
+        promql = value["promql"]
+        if not isinstance(promql, str) or not promql.strip():
+            raise ValidationError(
+                f"{field}.promql must be a non-empty string", f"{field}.promql")
+        out["promql"] = promql
+    return out
 
 
 def _validate_slo_section(value, field):

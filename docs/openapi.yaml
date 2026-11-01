@@ -4,25 +4,27 @@ info:
   version: 0.2.1
   summary: Read and change the SLO of an LLM inference service by its route.
   description: |
-    slo-api is a front door onto `LLMSLORequirement` custom resources, which
+    slo-api is a front door onto `LLMSLORequirement` and `JobSLORequirement`
+    custom resources, which
     slo-scaler-decision-gen reads to size each service. Callers address a
     service by its route and send plain JSON; they never see a namespace, a CR
     name or a kubeconfig.
 
     ```
-    client -- Bearer token --> slo-api --> LLMSLORequirement CRs --> decision-gen
+    client -- Bearer token --> slo-api --> {LLM,Job}SLORequirement CRs --> decision-gen
                                (patch only; never creates or deletes a CR)
     ```
 
     ## Routes
 
-    A route is a CR's `spec.serviceId`. The CR's lifecycle belongs to whatever
+    A route is a CR's `spec.serviceId`, of either kind. The CR's lifecycle belongs to whatever
     deployed the service (for swiss, the chart at install, with the release
     name as the serviceId). Here a route is only read and patched:
 
     - An unknown route is `404`, for writes too. Nothing here creates a CR.
-    - A serviceId found in more than one namespace is `409` for reads and
-      writes alike, with the candidates in `error.details`.
+    - A serviceId found on more than one CR (two namespaces, or one of each
+      kind) is `409` for reads and writes alike, with the candidates in
+      `error.details`.
 
     ## Readiness
 
@@ -33,9 +35,11 @@ info:
     ## Fields
 
     slo-api owns five fields of the CR spec: `priority`, `minimumDeployment`,
-    `maximumDeployment`, `ttft` and `otps`. Every other field, written by other
-    controllers, survives a write. `priority` (0-10 in the CR) is exposed as
-    the boolean `highPriority`.
+    `maximumDeployment`, `ttft` and `otps` -- on a `JobSLORequirement` route,
+    `queue` in place of `ttft` and `otps`, and bounds of type `replica` (or
+    `concurrency` for the minimum) only. A section of the other kind is `400`.
+    Every other field, written by other controllers, survives a write.
+    `priority` (0-10 in the CR) is exposed as the boolean `highPriority`.
 
     ## Errors
 
@@ -68,9 +72,9 @@ paths:
       summary: List routes
       description: |
         Routes in name order, read from the watch index rather than the API
-        server. Items leave out `ttft` and `otps`; read one route for those.
+        server. Items leave out `ttft`, `otps` and `queue`; read one route for those.
 
-        A route found in more than one namespace counts in `total` but is left
+        A route found on more than one CR counts in `total` but is left
         out of `items`, so a page can be shorter than `pageSize`.
       operationId: listConfigs
       parameters:
@@ -138,9 +142,12 @@ paths:
         the write, so a concurrent change to another field is not reverted.
         `spec.serviceId` is kept.
 
+        A `queue.promql` left out is kept, the same way.
+
         The CRD's own rules, such as `minimumDeployment.value` at most
-        `maximumDeployment.value`, are checked by the API server. A body that
-        breaks one comes back as `502`, not `400`.
+        `maximumDeployment.value`, or both bounds of the same `type`, are
+        checked by the API server on the merged spec. A body that breaks one
+        comes back as `400` with the API server's message.
       operationId: putConfig
       requestBody:
         required: true
@@ -176,7 +183,8 @@ paths:
       description: |
         Resets the five fields to the CRD defaults; the CR stays. `priority`
         becomes 0 and `minimumDeployment` `{type: replica, value: 1}`;
-        `maximumDeployment`, `ttft` and `otps` are removed.
+        `maximumDeployment`, `ttft` and `otps` are removed. A
+        `JobSLORequirement` keeps its `queue`, which its CRD requires.
 
         decision-gen treats a requirement with no `maximumDeployment` as opted
         out of autoscaling, so after a reset it stops sizing the service.
@@ -297,14 +305,14 @@ components:
           example:
             error: { code: not_found, message: "route 'ghost' not registered" }
     Ambiguous:
-      description: The route is the serviceId of CRs in more than one namespace.
+      description: The route is the serviceId of more than one CR.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example:
             error:
               code: conflict
-              message: "route 'my-model' maps to multiple LLMSLORequirement CRs; cannot auto-select a target"
+              message: "route 'my-model' maps to multiple SLO requirement CRs; cannot auto-select a target"
               details:
                 - { namespace: team-a, name: my-model }
                 - { namespace: team-b, name: my-model }
@@ -332,10 +340,11 @@ components:
           description: Absent means decision-gen does not autoscale the service.
         ttft: { $ref: "#/components/schemas/TTFT" }
         otps: { $ref: "#/components/schemas/OTPS" }
+        queue: { $ref: "#/components/schemas/Queue" }
 
     SLOSummary:
       type: object
-      description: A list item. `ttft` and `otps` are left out.
+      description: A list item. `ttft`, `otps` and `queue` are left out.
       required: [route, highPriority]
       properties:
         route: { type: string }
@@ -369,23 +378,39 @@ components:
           type: object
           required: [value]
           properties:
-            type: { type: string, enum: [replica, concurrency], default: replica }
-            value: { type: integer, minimum: 1 }
+            type: { type: string, enum: [replica, concurrency, pdengine], default: replica }
+            value: { type: integer, minimum: 0 }
         maximumDeployment:
           type: object
           required: [value]
           properties:
-            type: { type: string, enum: [replica], default: replica }
-            value: { type: integer, minimum: 1 }
+            type: { type: string, enum: [replica, pdengine], default: replica }
+            value: { type: integer, minimum: 0 }
         ttft: { $ref: "#/components/schemas/TTFT" }
         otps: { $ref: "#/components/schemas/OTPS" }
+        queue:
+          $ref: "#/components/schemas/Queue"
+          description: JobSLORequirement routes only. `promql` may be left out to keep the stored one.
 
     Bound:
       type: object
-      description: A replica bound as stored. The CRD allows 0 (scale to zero), which this API does not write.
+      description: |
+        A bound as stored. 0 is scale-to-zero: a minimum of 0 needs a maximum of
+        0, which turns the service off (a CRD rule, so breaking it is `400`).
+        `pdengine` counts a PD service's prefill plus decode engines
+        rather than replicas, and needs both bounds to be `pdengine`.
       properties:
-        type: { type: string, enum: [replica, concurrency] }
+        type: { type: string, enum: [replica, concurrency, pdengine] }
         value: { type: integer, minimum: 0 }
+
+    Queue:
+      type: object
+      description: Queue SLO of a `JobSLORequirement`.
+      additionalProperties: false
+      required: [maxDepth]
+      properties:
+        maxDepth: { type: integer, minimum: 0, description: Target pending jobs per replica. }
+        promql: { type: string, minLength: 1, description: PromQL that decision-gen evaluates to the queue depth. }
 
     TTFT:
       description: |

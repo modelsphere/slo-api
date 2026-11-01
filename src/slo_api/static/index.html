@@ -113,15 +113,15 @@
     <div>
       <label>minimumDeployment</label>
       <div class="row">
-        <select id="minType"><option value="replica">replica</option><option value="concurrency">concurrency</option></select>
-        <input type="number" id="minValue" min="1" step="1">
+        <select id="minType"><option value="replica">replica</option><option value="concurrency">concurrency</option><option value="pdengine">pdengine</option></select>
+        <input type="number" id="minValue" min="0" step="1">
       </div>
     </div>
     <div>
       <label>maximumDeployment</label>
       <div class="row">
-        <select id="maxType"><option value="replica">replica</option></select>
-        <input type="number" id="maxValue" min="1" step="1">
+        <select id="maxType"><option value="replica">replica</option><option value="pdengine">pdengine</option></select>
+        <input type="number" id="maxValue" min="0" step="1">
       </div>
     </div>
   </div>

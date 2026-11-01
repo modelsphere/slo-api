@@ -1,5 +1,6 @@
 import threading
 
+from slo_api import JOB_PLURAL, LLM_PLURAL
 from slo_api.cr_index import CRIndex
 
 from conftest import CRD_TEMPLATE, FakeCustomObjectsApi
@@ -57,7 +58,7 @@ def test_relist_never_shows_an_empty_index():
     api = FakeCustomObjectsApi()
     old = [CRD_TEMPLATE("ns1", "a", "route-a"), CRD_TEMPLATE("ns2", "b", "route-b")]
     idx = _index(api)
-    idx._replace(old)
+    idx._replace(LLM_PLURAL, old)
     seen = []
 
     def relisted():
@@ -65,6 +66,28 @@ def test_relist_never_shows_an_empty_index():
             seen.append(idx.list_routes())   # what a reader sees while the rebuild is under way
             yield cr
 
-    idx._replace(relisted())
+    idx._replace(LLM_PLURAL, relisted())
     assert all(s == ["route-a", "route-b"] for s in seen), seen
     assert idx.list_routes() == ["route-a", "route-b", "route-c"]
+
+
+def test_missing_job_crd_is_synced_and_serves_llm_routes():
+    """JobSLORequirement is optional: a cluster without its CRD must not hold readiness at 503."""
+    api = FakeCustomObjectsApi(missing={JOB_PLURAL})
+    api.seed(CRD_TEMPLATE("ns1", "a", "route-a"))
+    idx = _index(api)
+    idx.start()
+    try:
+        assert idx.wait_synced(timeout=2)
+        assert idx.list_routes() == ["route-a"]
+    finally:
+        idx.stop()
+
+
+def test_relist_of_one_kind_keeps_the_other():
+    api = FakeCustomObjectsApi()
+    idx = _index(api)
+    idx._replace(LLM_PLURAL, [CRD_TEMPLATE("ns1", "a", "route-a")])
+    idx._replace(JOB_PLURAL, [CRD_TEMPLATE("ns1", "j", "route-j", kind="JobSLORequirement")])
+    idx._replace(LLM_PLURAL, [CRD_TEMPLATE("ns1", "b", "route-b")])
+    assert idx.list_routes() == ["route-b", "route-j"]

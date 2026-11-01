@@ -1,4 +1,4 @@
-"""slo-api: HTTP facade over LLMSLORequirement CRs.
+"""slo-api: HTTP facade over LLMSLORequirement and JobSLORequirement CRs.
 
 Exposes a route-keyed REST API and translates to/from the underlying
 custom resource. Never creates new CRs; only get/patch/replace/delete
@@ -9,7 +9,10 @@ import logging as _logging
 _log = _logging.getLogger("slo-api")
 
 VERSION = "v1alpha1"
-PLURAL = "llmslorequirements"
+LLM_PLURAL = "llmslorequirements"
+JOB_PLURAL = "jobslorequirements"
+# Both kinds share one route space, as decision-gen sizes them side by side.
+PLURALS = (LLM_PLURAL, JOB_PLURAL)
 
 # The CRDs moved from inference.x-k8s.io to inference.modelsphere.dev. Both are
 # listed so this runs against a cluster on either, in the order to prefer them:

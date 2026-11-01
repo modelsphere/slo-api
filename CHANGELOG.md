@@ -8,11 +8,22 @@ no leading `v`.
 ## [Unreleased]
 
 ### Added
+- `JobSLORequirement` routes. The index watches both kinds, and a route
+  resolves across them; a job route's body has `queue` (`maxDepth`, `promql`)
+  in place of `ttft` / `otps`. A cluster without the JobSLO CRD serves the LLM
+  routes as before. The RBAC in `config/rbac/` grants `jobslorequirements`.
+- The `pdengine` bound type on `LLMSLORequirement` (helm-charts#95).
+- Bound values of 0 (scale-to-zero), which the CRD has allowed since
+  helm-charts#20; they were refused with `400` before.
 - CI on every pull request: pytest and the end-to-end smoke run on Python 3.10
   and 3.12, a docker build, and a gate for the license text and committed
   credentials.
 - Dependabot for the Python dependencies and the GitHub Actions.
 - `NOTICE`.
+
+### Changed
+- A write the CRD's rules reject (API server `422`) is `400 invalid_request`
+  with the API server's message, not `502`.
 
 ### Removed
 - The internal GitLab pipeline (`.gitlab-ci.yml`).
