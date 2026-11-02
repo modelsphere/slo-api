@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: slo-api
-  version: 0.2.1
+  version: 0.3.0
   summary: Read and change the SLO of an LLM inference service by its route.
   description: |
     slo-api is a front door onto `LLMSLORequirement` and `JobSLORequirement`
