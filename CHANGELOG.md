@@ -7,6 +7,8 @@ no leading `v`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
 ### Added
 - `JobSLORequirement` routes. The index watches both kinds, and a route
   resolves across them; a job route's body has `queue` (`maxDepth`, `promql`)
@@ -15,15 +17,28 @@ no leading `v`.
 - The `pdengine` bound type on `LLMSLORequirement` (helm-charts#95).
 - Bound values of 0 (scale-to-zero), which the CRD has allowed since
   helm-charts#20; they were refused with `400` before.
-- CI on every pull request: pytest and the end-to-end smoke run on Python 3.10
-  and 3.12, a docker build, and a gate for the license text and committed
-  credentials.
-- Dependabot for the Python dependencies and the GitHub Actions.
-- `NOTICE`.
+- `docs/openapi.yaml`.
 
 ### Changed
 - A write the CRD's rules reject (API server `422`) is `400 invalid_request`
   with the API server's message, not `502`.
+- `GET /config` also lists job routes, in the same summary shape.
+
+## [0.2.1] - 2026-10-28
+
+### Fixed
+- On a cluster with no `LLMSLORequirement`, slo-api never counted its index
+  as synced and crash-looped on the liveness probe. The index now lists
+  before it watches, so an empty list is a complete one.
+- A watch reconnect cleared the index before rebuilding it, so a request in
+  between answered a known route as unknown. The rebuilt index is swapped in
+  whole.
+
+### Added
+- CI on every pull request: pytest and the end-to-end smoke run on Python 3.10
+  and 3.12, a docker build, and a gate for the license text and committed
+  credentials.
+- `NOTICE`.
 
 ### Removed
 - The internal GitLab pipeline (`.gitlab-ci.yml`).
@@ -65,7 +80,9 @@ First tagged release.
   from a version tag and pushes it to Docker Hub.
 - Apache-2.0 `LICENSE`.
 
-[Unreleased]: https://github.com/modelsphere/slo-api/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/modelsphere/slo-api/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/modelsphere/slo-api/compare/0.2.1...0.3.0
+[0.2.1]: https://github.com/modelsphere/slo-api/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/modelsphere/slo-api/compare/0.2.0-rc1...0.2.0
 [0.2.0-rc1]: https://github.com/modelsphere/slo-api/compare/0.1.0...0.2.0-rc1
 [0.1.0]: https://github.com/modelsphere/slo-api/releases/tag/0.1.0
